@@ -1,0 +1,48 @@
+{
+  "name": "opencode-braintrust",
+  "version": "0.1.0",
+  "description": "Braintrust integration for OpenCode - tracing, evaluation, and data access",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --format esm",
+    "dev": "bun run --watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/**/*.ts",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "opencode",
+    "braintrust",
+    "llm",
+    "tracing",
+    "observability",
+    "evaluation"
+  ],
+  "author": "Braintrust",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/braintrustdata/opencode-braintrust"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "braintrust": "^0.0.185",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.1.14",
+    "@opencode-ai/sdk": "^1.1.14",
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0",
+    "@opencode-ai/sdk": ">=1.0.0"
+  }
+}

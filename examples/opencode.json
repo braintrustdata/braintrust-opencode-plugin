@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/schema.json",
+  "comment": "Example OpenCode configuration with Braintrust plugin",
+
+  "plugin": [
+    "opencode-braintrust"
+  ],
+
+  "model": "anthropic/claude-sonnet-4-5",
+
+  "instructions": [
+    "You are a helpful AI assistant with access to Braintrust for logging and evaluation.",
+    "When appropriate, you can query Braintrust logs to help debug or analyze past sessions.",
+    "You can log important outputs to Braintrust for later review."
+  ]
+}
