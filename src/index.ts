@@ -14,11 +14,23 @@ import { BraintrustClient, loadConfig } from "./client"
 export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   const config = loadConfig()
 
-  // Initialize Braintrust client if API key is available
+  // Create Braintrust client but don't initialize yet (lazy initialization)
   let btClient: BraintrustClient | undefined
+  let initPromise: Promise<void> | undefined
+
   if (config.apiKey) {
     btClient = new BraintrustClient(config)
-    await btClient.initialize()
+    // Start initialization in background, don't await
+    initPromise = btClient.initialize().catch((error) => {
+      // Log error but continue
+      input.client.app.log({
+        body: {
+          service: "braintrust",
+          level: "warn",
+          message: `Braintrust initialization failed: ${error instanceof Error ? error.message : String(error)}. Tracing disabled.`,
+        },
+      }).catch(() => {})
+    })
   }
 
   // Build hooks
@@ -61,6 +73,5 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 // Default export for OpenCode plugin loading
 export default BraintrustPlugin
 
-// Re-export types and utilities
-export { BraintrustClient } from "./client"
-export type { BraintrustConfig } from "./client"
+// Re-export types only (not the class, since OpenCode will try to call all exports as plugins)
+export type { BraintrustConfig, BraintrustClient } from "./client"

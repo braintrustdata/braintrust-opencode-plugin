@@ -21,9 +21,35 @@ Custom tools available to the AI assistant:
 - `braintrust_log_data`: Manually log data for evaluation or tracking
 - `braintrust_get_experiments`: View recent experiments
 
+## Quick Start
+
+```bash
+# 1. Clone and install
+git clone https://github.com/braintrustdata/opencode-braintrust
+cd opencode-braintrust
+./install.sh
+
+# 2. Set your API key
+export BRAINTRUST_API_KEY="your-api-key"
+
+# 3. Run OpenCode
+opencode
+
+# 4. View traces at:
+# https://www.braintrust.dev/app/projects/opencode/logs
+```
+
 ## Installation
 
-### Option 1: Install from npm
+### Option 1: Quick Install (Recommended)
+
+```bash
+git clone https://github.com/braintrustdata/opencode-braintrust
+cd opencode-braintrust
+./install.sh
+```
+
+### Option 2: Install from npm (when published)
 
 Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/opencode.json`):
 
@@ -33,7 +59,7 @@ Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/openc
 }
 ```
 
-### Option 2: Install from source
+### Option 3: Manual Installation
 
 1. Clone this repository
 2. Build the plugin:
@@ -134,6 +160,58 @@ Session (task span)
 │   └── ...
 └── metrics: total_turns, total_tool_calls
 ```
+
+## Troubleshooting
+
+### Plugin not loading / class constructor error
+
+If you see an error like `Cannot call a class constructor without |new|`:
+
+1. Make sure you're using the latest build:
+   ```bash
+   cd /path/to/opencode-braintrust
+   bun run build
+   cp dist/index.js ~/.config/opencode/plugin/braintrust.js
+   ```
+
+2. Or reinstall using the install script:
+   ```bash
+   ./install.sh
+   ```
+
+### No traces appearing in Braintrust
+
+1. Check that your API key is set:
+   ```bash
+   echo $BRAINTRUST_API_KEY
+   ```
+
+2. Enable debug mode to see what's happening:
+   ```bash
+   export BRAINTRUST_DEBUG=true
+   opencode
+   ```
+
+3. Check OpenCode logs for errors
+
+4. Verify the plugin is loaded:
+   - Plugin should log "Braintrust plugin initialized" when OpenCode starts
+
+### Tools not working
+
+If the Braintrust tools aren't available to the AI:
+
+1. Make sure `BRAINTRUST_API_KEY` is set
+2. Check that the plugin loaded successfully
+3. Try asking: "What tools do you have access to?"
+
+### API connection errors
+
+If you see connection errors:
+
+1. Check your internet connection
+2. Verify your API key is valid at https://www.braintrust.dev/app/settings
+3. Check if there's a firewall blocking `api.braintrust.dev`
 
 ## Development
 

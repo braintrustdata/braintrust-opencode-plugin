@@ -10,7 +10,6 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import { BraintrustClient, BraintrustConfig, SpanData } from "./client"
-import { hostname, userInfo, platform } from "node:os"
 
 // Generate a UUID
 function generateUUID(): string {
@@ -246,7 +245,8 @@ function formatToolName(tool: string, title?: string): string {
  */
 function getHostname(): string {
   try {
-    return hostname() || "unknown"
+    // Use Bun's API instead of Node's os module
+    return Bun.hostname || process.env.HOSTNAME || "unknown"
   } catch {
     return "unknown"
   }
@@ -254,15 +254,15 @@ function getHostname(): string {
 
 function getUsername(): string {
   try {
-    return userInfo().username || "unknown"
-  } catch {
     return process.env.USER || process.env.USERNAME || "unknown"
+  } catch {
+    return "unknown"
   }
 }
 
 function getOS(): string {
   try {
-    return platform() || "unknown"
+    return process.platform || "unknown"
   } catch {
     return "unknown"
   }
