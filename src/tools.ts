@@ -7,16 +7,14 @@
  * - Logging data
  */
 
-import { tool } from "@opencode-ai/plugin"
 import type { ToolDefinition } from "@opencode-ai/plugin"
-import { BraintrustClient } from "./client"
+import { tool } from "@opencode-ai/plugin"
+import type { BraintrustClient } from "./client"
 
 /**
  * Create Braintrust tools
  */
-export function createBraintrustTools(
-  client: BraintrustClient
-): Record<string, ToolDefinition> {
+export function createBraintrustTools(client: BraintrustClient): Record<string, ToolDefinition> {
   return {
     braintrust_query_logs: tool({
       description: `Query Braintrust logs using SQL.
@@ -70,18 +68,9 @@ This is useful for:
 - Creating evaluation datasets
 - Tracking model performance over time`,
       args: {
-        input: tool.schema
-          .string()
-          .optional()
-          .describe("The input that was given (optional)"),
-        output: tool.schema
-          .string()
-          .optional()
-          .describe("The output that was produced (optional)"),
-        expected: tool.schema
-          .string()
-          .optional()
-          .describe("The expected/ideal output (optional)"),
+        input: tool.schema.string().optional().describe("The input that was given (optional)"),
+        output: tool.schema.string().optional().describe("The output that was produced (optional)"),
+        expected: tool.schema.string().optional().describe("The expected/ideal output (optional)"),
         scores: tool.schema
           .string()
           .optional()
@@ -90,10 +79,7 @@ This is useful for:
           .string()
           .optional()
           .describe('JSON object of additional metadata, e.g. {"task_type": "code_review"}'),
-        tags: tool.schema
-          .string()
-          .optional()
-          .describe("Comma-separated list of tags"),
+        tags: tool.schema.string().optional().describe("Comma-separated list of tags"),
       },
       async execute(args) {
         try {
@@ -167,7 +153,7 @@ This is useful for:
         const limit = args.limit || 10
         try {
           // Query experiments via BTQL
-          const query = `
+          const _query = `
             SELECT id, name, created, metadata
             FROM experiments
             ORDER BY created DESC

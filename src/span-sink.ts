@@ -21,7 +21,7 @@ export class TestSpanCollector implements SpanSink {
   async insertSpan(span: SpanData): Promise<string | undefined> {
     // Handle merge operations
     if (span._is_merge) {
-      const existingIndex = this.spans.findIndex(s => s.span_id === span.span_id)
+      const existingIndex = this.spans.findIndex((s) => s.span_id === span.span_id)
       if (existingIndex >= 0) {
         // Merge the span data
         const existing = this.spans[existingIndex]
@@ -34,7 +34,7 @@ export class TestSpanCollector implements SpanSink {
         return span.span_id
       }
     }
-    
+
     this.spans.push(span)
     return span.span_id
   }
@@ -76,12 +76,10 @@ export function spansToTree(spans: SpanData[]): SpanTree | null {
   if (spans.length === 0) return null
 
   // Find the root span (no parents or parent is itself)
-  const rootSpan = spans.find(s => 
-    !s.span_parents || 
-    s.span_parents.length === 0 || 
-    s.span_parents[0] === s.span_id
+  const rootSpan = spans.find(
+    (s) => !s.span_parents || s.span_parents.length === 0 || s.span_parents[0] === s.span_id,
   )
-  
+
   if (!rootSpan) return null
 
   // Build a map of span_id -> children
@@ -102,14 +100,14 @@ export function spansToTree(spans: SpanData[]): SpanTree | null {
     const children = childrenMap.get(span.span_id) || []
     // Sort children by start time for consistent ordering
     // Use original array index as tiebreaker to preserve insertion order
-    const indexedChildren = children.map((c, i) => ({ span: c, originalIndex: spans.indexOf(c) }))
+    const indexedChildren = children.map((c, _i) => ({ span: c, originalIndex: spans.indexOf(c) }))
     indexedChildren.sort((a, b) => {
       const aStart = a.span.metrics?.start || 0
       const bStart = b.span.metrics?.start || 0
       if (aStart !== bStart) return aStart - bStart
       return a.originalIndex - b.originalIndex
     })
-    const sortedChildren = indexedChildren.map(ic => ic.span)
+    const sortedChildren = indexedChildren.map((ic) => ic.span)
 
     return {
       span_id: span.span_id,

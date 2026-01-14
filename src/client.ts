@@ -17,7 +17,7 @@ export interface SpanData {
   span_id: string
   root_span_id: string
   span_parents?: string[]
-  created?: string  // ISO timestamp for ordering
+  created?: string // ISO timestamp for ordering
   input?: unknown
   output?: unknown
   expected?: unknown
@@ -39,7 +39,7 @@ export interface SpanData {
     name?: string
     type?: "llm" | "task" | "tool" | "function" | "eval" | "score"
   }
-  _is_merge?: boolean  // When true, merge with existing span by id instead of creating new row
+  _is_merge?: boolean // When true, merge with existing span by id instead of creating new row
 }
 
 interface LoginResponse {
@@ -175,7 +175,7 @@ export class BraintrustClient {
           headers: {
             Authorization: `Bearer ${this.config.apiKey}`,
           },
-        }
+        },
       )
 
       if (response.ok) {
@@ -215,7 +215,10 @@ export class BraintrustClient {
   /**
    * Insert a span into project logs
    */
-  async insertSpan(span: SpanData, debugLog?: (msg: string, data?: unknown) => void): Promise<string | undefined> {
+  async insertSpan(
+    span: SpanData,
+    debugLog?: (msg: string, data?: unknown) => void,
+  ): Promise<string | undefined> {
     // Wait for initialization to complete
     const ready = await this.waitForInit()
     if (!ready || !this.projectId) {
@@ -225,8 +228,8 @@ export class BraintrustClient {
 
     try {
       const payload = { events: [span] }
-      debugLog?.("insertSpan: sending", { 
-        spanId: span.span_id, 
+      debugLog?.("insertSpan: sending", {
+        spanId: span.span_id,
         isMerge: span._is_merge,
         hasInput: span.input !== undefined,
         hasOutput: span.output !== undefined,
@@ -234,7 +237,7 @@ export class BraintrustClient {
         hasSpanAttributes: span.span_attributes !== undefined,
         payload: JSON.stringify(payload).substring(0, 500),
       })
-      
+
       const response = await fetch(
         `${this.resolvedApiUrl}/v1/project_logs/${this.projectId}/insert`,
         {
@@ -244,7 +247,7 @@ export class BraintrustClient {
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
-        }
+        },
       )
 
       if (!response.ok) {
@@ -276,7 +279,7 @@ export class BraintrustClient {
       // Rewrite "FROM logs" to "FROM project_logs('project_id')"
       const rewrittenSql = sql.replace(
         /\bFROM\s+logs\b/gi,
-        `FROM project_logs('${this.projectId}')`
+        `FROM project_logs('${this.projectId}')`,
       )
 
       const response = await fetch(`${this.resolvedApiUrl}/btql`, {

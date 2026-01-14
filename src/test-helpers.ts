@@ -5,20 +5,20 @@
  */
 
 import type {
-  Event,
-  EventSessionCreated,
-  EventSessionIdle,
-  EventSessionDeleted,
-  EventMessageUpdated,
-  EventMessagePartUpdated,
-  Session,
   AssistantMessage,
+  Event,
+  EventMessagePartUpdated,
+  EventMessageUpdated,
+  EventSessionCreated,
+  EventSessionDeleted,
+  EventSessionIdle,
+  Session,
   TextPart,
   ToolPart,
   ToolStateRunning,
 } from "@opencode-ai/sdk"
 import { EventProcessor } from "./event-processor"
-import { TestSpanCollector, spansToTree, type SpanTree } from "./span-sink"
+import { type SpanTree, spansToTree, TestSpanCollector } from "./span-sink"
 
 // ============================================================================
 // Types
@@ -35,7 +35,14 @@ export interface TestSession {
 export type TestItem =
   | Event
   | { _hook: "chat.message"; userMessage: string; model?: { providerID: string; modelID: string } }
-  | { _hook: "tool.execute"; callID: string; tool: string; title: string; input: Record<string, unknown>; output: string }
+  | {
+      _hook: "tool.execute"
+      callID: string
+      tool: string
+      title: string
+      input: Record<string, unknown>
+      output: string
+    }
 
 export interface TestToolCall {
   id: string
@@ -105,7 +112,7 @@ export function sessionDeleted(sessionID: string): EventSessionDeleted {
  */
 export function chatMessage(
   userMessage: string,
-  model?: { providerID: string; modelID: string }
+  model?: { providerID: string; modelID: string },
 ): TestItem {
   return { _hook: "chat.message", userMessage, model }
 }
@@ -113,7 +120,11 @@ export function chatMessage(
 /**
  * Create message.part.updated event for text
  */
-export function textPart(sessionID: string, messageID: string, text: string): EventMessagePartUpdated {
+export function textPart(
+  sessionID: string,
+  messageID: string,
+  text: string,
+): EventMessagePartUpdated {
   const part: TextPart = {
     id: `prt_text_${messageID}`,
     sessionID,
@@ -135,7 +146,7 @@ export function toolCallPart(
   messageID: string,
   callID: string,
   tool: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
 ): EventMessagePartUpdated {
   const toolState: ToolStateRunning = {
     status: "running",
@@ -167,7 +178,7 @@ export function messageCompleted(
     tokens?: { input: number; output: number }
     model?: { providerID: string; modelID: string }
     time?: { created: number; completed: number }
-  }
+  },
 ): EventMessageUpdated {
   const modelInfo = options?.model || { providerID: "anthropic", modelID: "claude-3-haiku" }
   const time = options?.time || { created: Date.now(), completed: Date.now() + 500 }
@@ -204,7 +215,7 @@ export function toolExecute(
   tool: string,
   title: string,
   input: Record<string, unknown>,
-  output: string
+  output: string,
 ): TestItem {
   return { _hook: "tool.execute", callID, tool, title, input, output }
 }
@@ -248,7 +259,14 @@ export interface ExpectedSpan {
 
 type HookItem =
   | { _hook: "chat.message"; userMessage: string; model?: { providerID: string; modelID: string } }
-  | { _hook: "tool.execute"; callID: string; tool: string; title: string; input: Record<string, unknown>; output: string }
+  | {
+      _hook: "tool.execute"
+      callID: string
+      tool: string
+      title: string
+      input: Record<string, unknown>
+      output: string
+    }
 
 function isHook(item: TestItem): item is HookItem {
   return typeof item === "object" && "_hook" in item
@@ -257,7 +275,10 @@ function isHook(item: TestItem): item is HookItem {
 /**
  * Process test session items and return the span tree
  */
-export async function eventsToTree(testSession: TestSession, projectName = "test-project"): Promise<SpanTree | null> {
+export async function eventsToTree(
+  testSession: TestSession,
+  projectName = "test-project",
+): Promise<SpanTree | null> {
   const collector = new TestSpanCollector()
   const processor = new EventProcessor(collector, { projectName })
 
@@ -266,16 +287,34 @@ export async function eventsToTree(testSession: TestSession, projectName = "test
   for (const item of testSession.items) {
     if (isHook(item)) {
       if (item._hook === "chat.message") {
-        const hook = item as { _hook: "chat.message"; userMessage: string; model?: { providerID: string; modelID: string } }
+        const hook = item as {
+          _hook: "chat.message"
+          userMessage: string
+          model?: { providerID: string; modelID: string }
+        }
         await processor.processChatMessage(
           sessionID,
           hook.userMessage,
-          hook.model || { providerID: "anthropic", modelID: "claude-3-haiku" }
+          hook.model || { providerID: "anthropic", modelID: "claude-3-haiku" },
         )
       } else if (item._hook === "tool.execute") {
-        const hook = item as { _hook: "tool.execute"; callID: string; tool: string; title: string; input: Record<string, unknown>; output: string }
+        const hook = item as {
+          _hook: "tool.execute"
+          callID: string
+          tool: string
+          title: string
+          input: Record<string, unknown>
+          output: string
+        }
         await processor.processToolExecuteBefore(sessionID, hook.callID)
-        await processor.processToolExecuteAfter(sessionID, hook.callID, hook.tool, hook.title, hook.output, hook.input)
+        await processor.processToolExecuteAfter(
+          sessionID,
+          hook.callID,
+          hook.tool,
+          hook.title,
+          hook.output,
+          hook.input,
+        )
       }
     } else {
       // It's a real Event
@@ -309,11 +348,18 @@ function spanMatchesSingle(actual: SpanTree, expected: ExpectedSpan): boolean {
   }
 
   if (expected.metrics) {
-    if (expected.metrics.prompt_tokens !== undefined && actual.metrics?.prompt_tokens !== expected.metrics.prompt_tokens)
+    if (
+      expected.metrics.prompt_tokens !== undefined &&
+      actual.metrics?.prompt_tokens !== expected.metrics.prompt_tokens
+    )
       return false
-    if (expected.metrics.completion_tokens !== undefined && actual.metrics?.completion_tokens !== expected.metrics.completion_tokens)
+    if (
+      expected.metrics.completion_tokens !== undefined &&
+      actual.metrics?.completion_tokens !== expected.metrics.completion_tokens
+    )
       return false
-    if (expected.metrics.tokens !== undefined && actual.metrics?.tokens !== expected.metrics.tokens) return false
+    if (expected.metrics.tokens !== undefined && actual.metrics?.tokens !== expected.metrics.tokens)
+      return false
   }
 
   if (expected.input !== undefined) {
@@ -359,27 +405,48 @@ export function getDiff(actual: SpanTree | null, expected: ExpectedSpan, path = 
 
   if (expected.span_attributes?.name !== undefined) {
     if (!nameMatches(actual.name, expected.span_attributes.name)) {
-      diffs.push(`${path}.span_attributes.name: expected "${expected.span_attributes.name}", got "${actual.name}"`)
+      diffs.push(
+        `${path}.span_attributes.name: expected "${expected.span_attributes.name}", got "${actual.name}"`,
+      )
     }
   }
 
-  if (expected.span_attributes?.type !== undefined && actual.type !== expected.span_attributes.type) {
-    diffs.push(`${path}.span_attributes.type: expected "${expected.span_attributes.type}", got "${actual.type}"`)
+  if (
+    expected.span_attributes?.type !== undefined &&
+    actual.type !== expected.span_attributes.type
+  ) {
+    diffs.push(
+      `${path}.span_attributes.type: expected "${expected.span_attributes.type}", got "${actual.type}"`,
+    )
   }
 
   if (expected.metrics) {
-    if (expected.metrics.prompt_tokens !== undefined && actual.metrics?.prompt_tokens !== expected.metrics.prompt_tokens) {
-      diffs.push(`${path}.metrics.prompt_tokens: expected ${expected.metrics.prompt_tokens}, got ${actual.metrics?.prompt_tokens}`)
+    if (
+      expected.metrics.prompt_tokens !== undefined &&
+      actual.metrics?.prompt_tokens !== expected.metrics.prompt_tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.prompt_tokens: expected ${expected.metrics.prompt_tokens}, got ${actual.metrics?.prompt_tokens}`,
+      )
     }
-    if (expected.metrics.completion_tokens !== undefined && actual.metrics?.completion_tokens !== expected.metrics.completion_tokens) {
-      diffs.push(`${path}.metrics.completion_tokens: expected ${expected.metrics.completion_tokens}, got ${actual.metrics?.completion_tokens}`)
+    if (
+      expected.metrics.completion_tokens !== undefined &&
+      actual.metrics?.completion_tokens !== expected.metrics.completion_tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.completion_tokens: expected ${expected.metrics.completion_tokens}, got ${actual.metrics?.completion_tokens}`,
+      )
     }
   }
 
   if (expected.children !== undefined) {
     if (actual.children.length !== expected.children.length) {
-      diffs.push(`${path}.children.length: expected ${expected.children.length}, got ${actual.children.length}`)
-      diffs.push(`  expected: ${expected.children.map((c) => `${c.span_attributes?.type}:${c.span_attributes?.name}`).join(", ")}`)
+      diffs.push(
+        `${path}.children.length: expected ${expected.children.length}, got ${actual.children.length}`,
+      )
+      diffs.push(
+        `  expected: ${expected.children.map((c) => `${c.span_attributes?.type}:${c.span_attributes?.name}`).join(", ")}`,
+      )
       diffs.push(`  actual: ${actual.children.map((c) => `${c.type}:${c.name}`).join(", ")}`)
     } else {
       for (let i = 0; i < expected.children.length; i++) {
@@ -407,7 +474,7 @@ export function assertTreeMatches(actual: SpanTree | null, expected: ExpectedSpa
 export async function assertEventsProduceTree(
   testSession: TestSession,
   expected: ExpectedSpan,
-  projectName = "test-project"
+  projectName = "test-project",
 ): Promise<void> {
   const actual = await eventsToTree(testSession, projectName)
   assertTreeMatches(actual, expected)

@@ -1,6 +1,6 @@
 /**
  * Event processor for testing - processes OpenCode events into spans
- * 
+ *
  * This module extracts the core event processing logic so it can be tested
  * independently of the OpenCode plugin infrastructure.
  */
@@ -28,7 +28,10 @@ interface SessionState {
   // LLM span tracking
   currentAssistantMessageId?: string
   llmOutputParts: Map<string, string>
-  llmToolCalls: Map<string, Array<{ id: string; type: string; function: { name: string; arguments: string } }>>
+  llmToolCalls: Map<
+    string,
+    Array<{ id: string; type: string; function: { name: string; arguments: string } }>
+  >
   processedLlmMessages: Set<string>
   // Tool span tracking
   toolStartTimes: Map<string, number>
@@ -52,7 +55,7 @@ export class EventProcessor {
   constructor(
     spanSink: SpanSink,
     config: EventProcessorConfig,
-    log?: (msg: string, data?: unknown) => void
+    log?: (msg: string, data?: unknown) => void,
   ) {
     this.spanSink = spanSink
     this.config = config
@@ -65,10 +68,7 @@ export class EventProcessor {
   async processEvent(event: Event): Promise<void> {
     const props = event.properties as Record<string, unknown>
     const info = props.info as Record<string, unknown> | undefined
-    const sessionID =
-      (props.sessionID as string) ||
-      (info?.id as string) ||
-      (props.id as string)
+    const sessionID = (props.sessionID as string) || (info?.id as string) || (props.id as string)
 
     if (event.type === "session.created") {
       await this.handleSessionCreated(sessionID)
@@ -89,7 +89,7 @@ export class EventProcessor {
   async processChatMessage(
     sessionID: string,
     userMessage: string,
-    model?: { providerID?: string; modelID?: string }
+    model?: { providerID?: string; modelID?: string },
   ): Promise<void> {
     const state = this.sessionStates.get(sessionID)
     if (!state) {
@@ -164,7 +164,7 @@ export class EventProcessor {
     tool: string,
     title: string,
     output: string,
-    metadata: unknown
+    metadata: unknown,
   ): Promise<void> {
     const state = this.sessionStates.get(sessionID)
     if (!state || !state.currentTurnSpanId) {
@@ -185,7 +185,7 @@ export class EventProcessor {
       root_span_id: state.rootSpanId,
       span_parents: [state.currentTurnSpanId],
       input: metadata,
-      output: typeof output === 'string' ? output.substring(0, 10000) : output,
+      output: typeof output === "string" ? output.substring(0, 10000) : output,
       metadata: {
         tool_name: tool,
         call_id: callID,
@@ -292,7 +292,7 @@ export class EventProcessor {
           state.llmToolCalls.set(messageId, toolCalls)
         }
 
-        const existingIndex = toolCalls.findIndex(tc => tc.id === callID)
+        const existingIndex = toolCalls.findIndex((tc) => tc.id === callID)
         const toolCall = {
           id: callID,
           type: "function" as const,
@@ -370,8 +370,8 @@ export class EventProcessor {
     const totalTokens = inputTokens + outputTokens + reasoningTokens
 
     // Extract model info
-    const providerID = messageInfo.providerID as string || "unknown"
-    const modelID = messageInfo.modelID as string || "unknown"
+    const providerID = (messageInfo.providerID as string) || "unknown"
+    const modelID = (messageInfo.modelID as string) || "unknown"
     const modelName = `${providerID}/${modelID}`
 
     // Get output text and tool calls from tracked parts
@@ -435,7 +435,7 @@ export class EventProcessor {
     const sessionKey = String(sessionID)
     const state = this.sessionStates.get(sessionKey)
 
-    if (state && state.currentTurnSpanId) {
+    if (state?.currentTurnSpanId) {
       const now = Date.now()
       const turnSpan: SpanData = {
         id: state.currentTurnSpanId,
@@ -505,15 +505,16 @@ export class EventProcessor {
   private formatToolName(tool: string, title?: string): string {
     if (title) {
       let displayTitle = title
-      
+
       // For file operations, show just the filename instead of full path
       if ((tool === "read" || tool === "edit") && title.includes("/")) {
         const parts = title.split("/")
         displayTitle = parts[parts.length - 1] || title
       }
-      
+
       // Truncate long titles
-      const shortTitle = displayTitle.length > 50 ? displayTitle.substring(0, 47) + "..." : displayTitle
+      const shortTitle =
+        displayTitle.length > 50 ? `${displayTitle.substring(0, 47)}...` : displayTitle
       return `${tool}: ${shortTitle}`
     }
     return tool
@@ -526,8 +527,19 @@ export class EventProcessor {
 export async function processEventsToSpans(
   events: Event[],
   config: EventProcessorConfig,
-  chatMessages?: Array<{ sessionID: string; userMessage: string; model?: { providerID?: string; modelID?: string } }>,
-  toolCalls?: Array<{ sessionID: string; callID: string; tool: string; title: string; output: string; metadata: unknown }>
+  chatMessages?: Array<{
+    sessionID: string
+    userMessage: string
+    model?: { providerID?: string; modelID?: string }
+  }>,
+  _toolCalls?: Array<{
+    sessionID: string
+    callID: string
+    tool: string
+    title: string
+    output: string
+    metadata: unknown
+  }>,
 ): Promise<SpanData[]> {
   const { TestSpanCollector } = await import("./span-sink")
   const collector = new TestSpanCollector()
@@ -536,14 +548,14 @@ export async function processEventsToSpans(
   // Process events in order, interleaving chat messages and tool calls as needed
   for (const event of events) {
     await processor.processEvent(event)
-    
+
     // Check if we need to process a chat message after session.created
     if (event.type === "session.created" && chatMessages) {
       const props = event.properties as Record<string, unknown>
       const info = props.info as Record<string, unknown> | undefined
       const sessionID = (props.sessionID as string) || (info?.id as string)
-      
-      const chatMsg = chatMessages.find(cm => cm.sessionID === sessionID)
+
+      const chatMsg = chatMessages.find((cm) => cm.sessionID === sessionID)
       if (chatMsg) {
         await processor.processChatMessage(chatMsg.sessionID, chatMsg.userMessage, chatMsg.model)
       }

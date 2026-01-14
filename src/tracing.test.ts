@@ -6,15 +6,15 @@
 
 import { describe, it } from "bun:test"
 import {
+  assertEventsProduceTree,
+  chatMessage,
+  messageCompleted,
   session,
   sessionCreated,
   sessionIdle,
-  chatMessage,
   textPart,
   toolCallPart,
   toolExecute,
-  messageCompleted,
-  assertEventsProduceTree,
 } from "./test-helpers"
 
 describe("Event to Span Transformation", () => {
@@ -23,7 +23,8 @@ describe("Event to Span Transformation", () => {
     const messageId = "msg_1"
 
     await assertEventsProduceTree(
-      session(sessionId,
+      session(
+        sessionId,
         sessionCreated(sessionId),
         chatMessage("Hello, world!"),
         textPart(sessionId, messageId, "Hi there!"),
@@ -39,11 +40,11 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 10, completion_tokens: 5, tokens: 15 },
-              }
-            ]
-          }
-        ]
-      }
+              },
+            ],
+          },
+        ],
+      },
     )
   })
 
@@ -51,7 +52,8 @@ describe("Event to Span Transformation", () => {
     const sessionId = "ses_multi"
 
     await assertEventsProduceTree(
-      session(sessionId,
+      session(
+        sessionId,
         sessionCreated(sessionId),
         // Turn 1
         chatMessage("What is 2+2?"),
@@ -78,8 +80,8 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 8, completion_tokens: 6, tokens: 14 },
-              }
-            ]
+              },
+            ],
           },
           {
             span_attributes: { name: "Turn 2", type: "task" },
@@ -87,8 +89,8 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 12, completion_tokens: 7, tokens: 19 },
-              }
-            ]
+              },
+            ],
           },
           {
             span_attributes: { name: "Turn 3", type: "task" },
@@ -96,11 +98,11 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 15, completion_tokens: 8, tokens: 23 },
-              }
-            ]
-          }
-        ]
-      }
+              },
+            ],
+          },
+        ],
+      },
     )
   })
 
@@ -109,13 +111,26 @@ describe("Event to Span Transformation", () => {
     const messageId = "msg_1"
 
     await assertEventsProduceTree(
-      session(sessionId,
+      session(
+        sessionId,
         sessionCreated(sessionId),
         chatMessage("Read the config file"),
         // LLM decides to call read tool
-        toolCallPart(sessionId, messageId, "call_1", "read", { filePath: "/home/user/project/src/config.ts" }),
-        toolExecute("call_1", "read", "/home/user/project/src/config.ts", { filePath: "/home/user/project/src/config.ts" }, "export const config = { debug: true }"),
-        textPart(sessionId, messageId, "I've read the config file. It exports a config object with debug: true."),
+        toolCallPart(sessionId, messageId, "call_1", "read", {
+          filePath: "/home/user/project/src/config.ts",
+        }),
+        toolExecute(
+          "call_1",
+          "read",
+          "/home/user/project/src/config.ts",
+          { filePath: "/home/user/project/src/config.ts" },
+          "export const config = { debug: true }",
+        ),
+        textPart(
+          sessionId,
+          messageId,
+          "I've read the config file. It exports a config object with debug: true.",
+        ),
         messageCompleted(sessionId, messageId, { tokens: { input: 20, output: 15 } }),
         sessionIdle(sessionId),
       ),
@@ -131,11 +146,11 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 20, completion_tokens: 15, tokens: 35 },
-              }
-            ]
-          }
-        ]
-      }
+              },
+            ],
+          },
+        ],
+      },
     )
   })
 
@@ -144,15 +159,32 @@ describe("Event to Span Transformation", () => {
     const messageId = "msg_1"
 
     await assertEventsProduceTree(
-      session(sessionId,
+      session(
+        sessionId,
         sessionCreated(sessionId),
         chatMessage("Read the config and then edit it"),
         // LLM calls read first
         toolCallPart(sessionId, messageId, "call_1", "read", { filePath: "/project/config.ts" }),
-        toolExecute("call_1", "read", "/project/config.ts", { filePath: "/project/config.ts" }, "export const debug = false"),
+        toolExecute(
+          "call_1",
+          "read",
+          "/project/config.ts",
+          { filePath: "/project/config.ts" },
+          "export const debug = false",
+        ),
         // LLM calls edit
-        toolCallPart(sessionId, messageId, "call_2", "edit", { filePath: "/project/config.ts", oldString: "false", newString: "true" }),
-        toolExecute("call_2", "edit", "/project/config.ts", { filePath: "/project/config.ts", oldString: "false", newString: "true" }, "Edit applied successfully"),
+        toolCallPart(sessionId, messageId, "call_2", "edit", {
+          filePath: "/project/config.ts",
+          oldString: "false",
+          newString: "true",
+        }),
+        toolExecute(
+          "call_2",
+          "edit",
+          "/project/config.ts",
+          { filePath: "/project/config.ts", oldString: "false", newString: "true" },
+          "Edit applied successfully",
+        ),
         textPart(sessionId, messageId, "Done! I changed debug from false to true."),
         messageCompleted(sessionId, messageId, { tokens: { input: 30, output: 12 } }),
         sessionIdle(sessionId),
@@ -174,10 +206,10 @@ describe("Event to Span Transformation", () => {
               {
                 span_attributes: { name: "edit: config.ts", type: "tool" },
               },
-            ]
-          }
-        ]
-      }
+            ],
+          },
+        ],
+      },
     )
   })
 })

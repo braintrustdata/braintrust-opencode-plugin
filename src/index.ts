@@ -6,10 +6,10 @@
  * 2. Data Access - Tools to query and interact with Braintrust data
  */
 
-import type { Plugin, Hooks, PluginInput } from "@opencode-ai/plugin"
-import { createTracingHooks } from "./tracing"
-import { createBraintrustTools } from "./tools"
+import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
 import { BraintrustClient, loadConfig } from "./client"
+import { createBraintrustTools } from "./tools"
+import { createTracingHooks } from "./tracing"
 
 export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   const { client } = input
@@ -17,20 +17,22 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 
   // Create Braintrust client but don't initialize yet (lazy initialization)
   let btClient: BraintrustClient | undefined
-  let initPromise: Promise<void> | undefined
+  let _initPromise: Promise<void> | undefined
 
   if (config.apiKey) {
     btClient = new BraintrustClient(config)
     // Start initialization in background, don't await
-    initPromise = btClient.initialize().catch((error) => {
+    _initPromise = btClient.initialize().catch((error) => {
       // Log error but continue
-      client.app.log({
-        body: {
-          service: "braintrust",
-          level: "warn",
-          message: `Braintrust initialization failed: ${error instanceof Error ? error.message : String(error)}. Tracing disabled.`,
-        },
-      }).catch(() => {})
+      client.app
+        .log({
+          body: {
+            service: "braintrust",
+            level: "warn",
+            message: `Braintrust initialization failed: ${error instanceof Error ? error.message : String(error)}. Tracing disabled.`,
+          },
+        })
+        .catch(() => {})
     })
   }
 
@@ -41,15 +43,17 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   if (config.tracingEnabled && btClient) {
     const tracingHooks = createTracingHooks(btClient, input, config)
     Object.assign(hooks, tracingHooks)
-    
+
     // Log what hooks we're returning
-    client.app.log({
-      body: {
-        service: "braintrust",
-        level: "info",
-        message: `Tracing hooks registered: ${Object.keys(tracingHooks).join(", ")}`,
-      },
-    }).catch(() => {})
+    client.app
+      .log({
+        body: {
+          service: "braintrust",
+          level: "info",
+          message: `Tracing hooks registered: ${Object.keys(tracingHooks).join(", ")}`,
+        },
+      })
+      .catch(() => {})
   }
 
   // Add Braintrust tools if client is available
@@ -59,22 +63,26 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 
   // Log initialization status (non-blocking to avoid hanging startup)
   if (btClient) {
-    client.app.log({
-      body: {
-        service: "braintrust",
-        level: "info",
-        message: `Logging Braintrust spans to project "${config.projectName}"`,
-      },
-    }).catch(() => {})
+    client.app
+      .log({
+        body: {
+          service: "braintrust",
+          level: "info",
+          message: `Logging Braintrust spans to project "${config.projectName}"`,
+        },
+      })
+      .catch(() => {})
   } else {
-    client.app.log({
-      body: {
-        service: "braintrust",
-        level: "warn",
-        message:
-          "Braintrust plugin loaded but BRAINTRUST_API_KEY not set. Set it in your environment to enable tracing and data access.",
-      },
-    }).catch(() => {})
+    client.app
+      .log({
+        body: {
+          service: "braintrust",
+          level: "warn",
+          message:
+            "Braintrust plugin loaded but BRAINTRUST_API_KEY not set. Set it in your environment to enable tracing and data access.",
+        },
+      })
+      .catch(() => {})
   }
 
   return hooks
@@ -84,4 +92,4 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 export default BraintrustPlugin
 
 // Re-export types only (not the class, since OpenCode will try to call all exports as plugins)
-export type { BraintrustConfig, BraintrustClient } from "./client"
+export type { BraintrustClient, BraintrustConfig } from "./client"
