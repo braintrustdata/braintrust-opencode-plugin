@@ -43,5 +43,6 @@ echo "3. Run OpenCode:"
 echo "   opencode"
 echo ""
 echo "4. Your sessions will be traced to Braintrust automatically!"
-echo "   View at: https://www.braintrust.dev/app/projects/\${BRAINTRUST_PROJECT:-opencode}/logs"
+# TODO: add org to url to fix the link
+# echo "   View at: https://www.braintrust.dev/app/projects/${BRAINTRUST_PROJECT:-opencode}/logs"
 echo ""

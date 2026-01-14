@@ -17,6 +17,7 @@ export interface SpanData {
   span_id: string
   root_span_id: string
   span_parents?: string[]
+  created?: string  // ISO timestamp for ordering
   input?: unknown
   output?: unknown
   expected?: unknown
@@ -38,6 +39,7 @@ export interface SpanData {
     name?: string
     type?: "llm" | "task" | "tool" | "function" | "eval" | "score"
   }
+  _is_merge?: boolean  // When true, merge with existing span by id instead of creating new row
 }
 
 interface LoginResponse {
@@ -72,21 +74,48 @@ export class BraintrustClient {
   private config: BraintrustConfig
   private resolvedApiUrl?: string
   private projectId?: string
+  private initPromise?: Promise<void>
+  private initError?: Error
 
   constructor(config: BraintrustConfig) {
     this.config = config
   }
 
   async initialize(): Promise<void> {
-    // Resolve API URL
-    this.resolvedApiUrl = await this.resolveApiUrl()
+    // Store the initialization promise so other methods can wait on it
+    if (!this.initPromise) {
+      this.initPromise = this._doInitialize()
+    }
+    return this.initPromise
+  }
 
-    // Get or create project
-    this.projectId = await this.getOrCreateProject(this.config.projectName)
+  private async _doInitialize(): Promise<void> {
+    try {
+      // Resolve API URL
+      this.resolvedApiUrl = await this.resolveApiUrl()
 
-    if (this.config.debug) {
-      console.log(`[braintrust] Initialized with API URL: ${this.resolvedApiUrl}`)
-      console.log(`[braintrust] Project ID: ${this.projectId}`)
+      // Get or create project
+      this.projectId = await this.getOrCreateProject(this.config.projectName)
+
+      // Debug info stored for later retrieval if needed
+    } catch (error) {
+      this.initError = error instanceof Error ? error : new Error(String(error))
+      throw this.initError
+    }
+  }
+
+  /**
+   * Wait for initialization to complete (used by methods that need the client ready)
+   */
+  async waitForInit(): Promise<boolean> {
+    if (!this.initPromise) {
+      return false
+    }
+    try {
+      await this.initPromise
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -111,7 +140,6 @@ export class BraintrustClient {
       })
 
       if (!response.ok) {
-        console.warn(`[braintrust] Login failed: ${response.status}`)
         return "https://api.braintrust.dev"
       }
 
@@ -129,8 +157,8 @@ export class BraintrustClient {
       if (data.org_info?.[0]?.api_url) {
         return data.org_info[0].api_url
       }
-    } catch (error) {
-      console.warn(`[braintrust] Failed to resolve API URL: ${error}`)
+    } catch {
+      // Fall back to default API URL
     }
 
     return "https://api.braintrust.dev"
@@ -177,8 +205,8 @@ export class BraintrustClient {
           return data.id
         }
       }
-    } catch (error) {
-      console.error(`[braintrust] Failed to create project: ${error}`)
+    } catch {
+      // Fall through to throw
     }
 
     throw new Error(`Failed to get or create project: ${name}`)
@@ -187,13 +215,26 @@ export class BraintrustClient {
   /**
    * Insert a span into project logs
    */
-  async insertSpan(span: SpanData): Promise<string | undefined> {
-    if (!this.projectId) {
-      console.error("[braintrust] Cannot insert span: project not initialized")
+  async insertSpan(span: SpanData, debugLog?: (msg: string, data?: unknown) => void): Promise<string | undefined> {
+    // Wait for initialization to complete
+    const ready = await this.waitForInit()
+    if (!ready || !this.projectId) {
+      debugLog?.("insertSpan: not ready", { ready, projectId: this.projectId })
       return undefined
     }
 
     try {
+      const payload = { events: [span] }
+      debugLog?.("insertSpan: sending", { 
+        spanId: span.span_id, 
+        isMerge: span._is_merge,
+        hasInput: span.input !== undefined,
+        hasOutput: span.output !== undefined,
+        hasSpanParents: span.span_parents !== undefined,
+        hasSpanAttributes: span.span_attributes !== undefined,
+        payload: JSON.stringify(payload).substring(0, 500),
+      })
+      
       const response = await fetch(
         `${this.resolvedApiUrl}/v1/project_logs/${this.projectId}/insert`,
         {
@@ -202,20 +243,21 @@ export class BraintrustClient {
             Authorization: `Bearer ${this.config.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ events: [span] }),
+          body: JSON.stringify(payload),
         }
       )
 
       if (!response.ok) {
         const text = await response.text()
-        console.error(`[braintrust] Insert failed (${response.status}): ${text}`)
+        debugLog?.("insertSpan: request failed", { status: response.status, text })
         return undefined
       }
 
       const data = (await response.json()) as InsertResponse
+      debugLog?.("insertSpan: success", { rowId: data.row_ids?.[0] })
       return data.row_ids?.[0]
-    } catch (error) {
-      console.error(`[braintrust] Failed to insert span: ${error}`)
+    } catch (e) {
+      debugLog?.("insertSpan: error", { error: String(e) })
       return undefined
     }
   }
@@ -224,6 +266,12 @@ export class BraintrustClient {
    * Execute a BTQL query against project logs
    */
   async queryLogs(sql: string): Promise<unknown[]> {
+    // Wait for initialization to complete
+    const ready = await this.waitForInit()
+    if (!ready || !this.projectId) {
+      throw new Error("Braintrust client not initialized")
+    }
+
     try {
       // Rewrite "FROM logs" to "FROM project_logs('project_id')"
       const rewrittenSql = sql.replace(
@@ -256,6 +304,12 @@ export class BraintrustClient {
    * List projects in the organization
    */
   async listProjects(): Promise<ProjectResponse[]> {
+    // Wait for initialization to complete
+    const ready = await this.waitForInit()
+    if (!ready) {
+      throw new Error("Braintrust client not initialized")
+    }
+
     try {
       const response = await fetch(`${this.resolvedApiUrl}/v1/project`, {
         headers: {

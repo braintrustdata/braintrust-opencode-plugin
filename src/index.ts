@@ -12,6 +12,7 @@ import { createBraintrustTools } from "./tools"
 import { BraintrustClient, loadConfig } from "./client"
 
 export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
+  const { client } = input
   const config = loadConfig()
 
   // Create Braintrust client but don't initialize yet (lazy initialization)
@@ -23,7 +24,7 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
     // Start initialization in background, don't await
     initPromise = btClient.initialize().catch((error) => {
       // Log error but continue
-      input.client.app.log({
+      client.app.log({
         body: {
           service: "braintrust",
           level: "warn",
@@ -40,6 +41,15 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   if (config.tracingEnabled && btClient) {
     const tracingHooks = createTracingHooks(btClient, input, config)
     Object.assign(hooks, tracingHooks)
+    
+    // Log what hooks we're returning
+    client.app.log({
+      body: {
+        service: "braintrust",
+        level: "info",
+        message: `Tracing hooks registered: ${Object.keys(tracingHooks).join(", ")}`,
+      },
+    }).catch(() => {})
   }
 
   // Add Braintrust tools if client is available
@@ -47,24 +57,24 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
     hooks.tool = createBraintrustTools(btClient)
   }
 
-  // Log initialization status
+  // Log initialization status (non-blocking to avoid hanging startup)
   if (btClient) {
-    await input.client.app.log({
+    client.app.log({
       body: {
         service: "braintrust",
         level: "info",
-        message: `Braintrust plugin initialized${config.tracingEnabled ? " with tracing" : ""}`,
+        message: `Logging Braintrust spans to project "${config.projectName}"`,
       },
-    })
+    }).catch(() => {})
   } else {
-    await input.client.app.log({
+    client.app.log({
       body: {
         service: "braintrust",
         level: "warn",
         message:
           "Braintrust plugin loaded but BRAINTRUST_API_KEY not set. Set it in your environment to enable tracing and data access.",
       },
-    })
+    }).catch(() => {})
   }
 
   return hooks
