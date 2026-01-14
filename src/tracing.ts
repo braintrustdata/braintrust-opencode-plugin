@@ -27,6 +27,13 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  // LLM span tracking
+  currentAssistantMessageId?: string
+  llmOutputParts: Map<string, string> // messageId -> accumulated text
+  llmToolCalls: Map<string, Array<{ id: string; type: string; function: { name: string; arguments: string } }>> // messageId -> tool_calls
+  processedLlmMessages: Set<string> // track which assistant messages we've created spans for
+  // Tool span tracking
+  toolStartTimes: Map<string, number> // callID -> start timestamp
 }
 
 const sessionStates = new Map<string, SessionState>()
@@ -108,6 +115,10 @@ export function createTracingHooks(
             turnNumber: 0,
             toolCallCount: 0,
             startTime: Date.now(),
+            llmOutputParts: new Map(),
+            llmToolCalls: new Map(),
+            processedLlmMessages: new Set(),
+            toolStartTimes: new Map(),
           }
           sessionStates.set(sessionKey, state)
 
@@ -139,27 +150,197 @@ export function createTracingHooks(
         // Track message content from message.part.updated events
         else if (event.type === "message.part.updated") {
           const part = props.part as Record<string, unknown> | undefined
-          if (part?.type === "text" && part?.text) {
-            const partSessionID = part.sessionID as string
-            if (!partSessionID) {
-              log("message.part.updated: no sessionID in part")
-              return
-            }
-            const state = sessionStates.get(partSessionID)
-            if (!state) {
-              log("message.part.updated: no state for session", { partSessionID, availableSessions: Array.from(sessionStates.keys()) })
-              return
-            }
-            
+          const partSessionID = part?.sessionID as string
+          const messageId = part?.messageID as string
+          
+          if (!partSessionID || !part) {
+            log("message.part.updated: no sessionID or part")
+            return
+          }
+          
+          const state = sessionStates.get(partSessionID)
+          if (!state) {
+            log("message.part.updated: no state for session", { partSessionID, availableSessions: Array.from(sessionStates.keys()) })
+            return
+          }
+          
+          // Track text content
+          if (part.type === "text" && part.text) {
             const text = part.text as string
             const time = part.time as Record<string, unknown> | undefined
             
-            // If this message has time.end, it's complete - capture as output
+            // Track text content by messageId for LLM spans
+            if (messageId) {
+              state.llmOutputParts.set(messageId, text)
+              log("Tracking LLM output part", { messageId, textLength: text.length })
+            }
+            
+            // If this message has time.end, it's complete - capture as output for turn
             if (time?.end && state.currentTurnSpanId) {
               state.currentOutput = text
               log("Captured assistant output", { turnNumber: state.turnNumber, outputLength: text.length, output: text.substring(0, 100) })
             }
           }
+          // Track tool calls for LLM span output
+          else if (part.type === "tool" && messageId) {
+            const callID = part.callID as string
+            const tool = part.tool as string
+            const partState = part.state as Record<string, unknown> | undefined
+            const input = partState?.input as Record<string, unknown> | undefined
+            
+            if (callID && tool && input) {
+              // Get or create tool_calls array for this message
+              let toolCalls = state.llmToolCalls.get(messageId)
+              if (!toolCalls) {
+                toolCalls = []
+                state.llmToolCalls.set(messageId, toolCalls)
+              }
+              
+              // Check if we already have this tool call (avoid duplicates from streaming updates)
+              const existingIndex = toolCalls.findIndex(tc => tc.id === callID)
+              const toolCall = {
+                id: callID,
+                type: "function" as const,
+                function: {
+                  name: tool,
+                  arguments: JSON.stringify(input),
+                },
+              }
+              
+              if (existingIndex >= 0) {
+                // Update existing
+                toolCalls[existingIndex] = toolCall
+              } else {
+                // Add new
+                toolCalls.push(toolCall)
+              }
+              
+              log("Tracking LLM tool call", { messageId, callID, tool })
+            }
+          }
+        }
+        // Handle assistant message completion - create LLM span
+        else if (event.type === "message.updated") {
+          const messageInfo = props.info as Record<string, unknown> | undefined
+          if (!messageInfo) {
+            log("message.updated: no info in props")
+            return
+          }
+          
+          const role = messageInfo.role as string
+          if (role !== "assistant") {
+            log("message.updated: skipping non-assistant message", { role })
+            return
+          }
+          
+          const msgSessionID = messageInfo.sessionID as string
+          const messageId = messageInfo.id as string
+          const time = messageInfo.time as Record<string, unknown> | undefined
+          
+          if (!msgSessionID || !messageId) {
+            log("message.updated: missing sessionID or messageId", { msgSessionID, messageId })
+            return
+          }
+          
+          const state = sessionStates.get(msgSessionID)
+          if (!state) {
+            log("message.updated: no state for session", { msgSessionID })
+            return
+          }
+          
+          // Only create LLM span when message is completed
+          if (!time?.completed) {
+            log("message.updated: message not completed yet", { messageId, time })
+            return
+          }
+          
+          // Skip if we already processed this message
+          if (state.processedLlmMessages.has(messageId)) {
+            log("message.updated: already processed", { messageId })
+            return
+          }
+          
+          // Need a current turn to attach the LLM span to
+          if (!state.currentTurnSpanId) {
+            log("message.updated: no current turn span", { messageId })
+            return
+          }
+          
+          // Mark as processed
+          state.processedLlmMessages.add(messageId)
+          
+          // Extract token info
+          const tokens = messageInfo.tokens as Record<string, unknown> | undefined
+          const inputTokens = (tokens?.input as number) || 0
+          const outputTokens = (tokens?.output as number) || 0
+          const reasoningTokens = (tokens?.reasoning as number) || 0
+          const totalTokens = inputTokens + outputTokens + reasoningTokens
+          
+          // Extract model info
+          const providerID = messageInfo.providerID as string || "unknown"
+          const modelID = messageInfo.modelID as string || "unknown"
+          const modelName = `${providerID}/${modelID}`
+          
+          // Get output text and tool calls from tracked parts
+          const outputText = state.llmOutputParts.get(messageId) || ""
+          const toolCalls = state.llmToolCalls.get(messageId)
+          
+          // Build assistant message object - include tool_calls if present
+          const assistantMessage: Record<string, unknown> = {
+            role: "assistant",
+            content: outputText,
+          }
+          if (toolCalls && toolCalls.length > 0) {
+            assistantMessage.tool_calls = toolCalls
+          }
+          
+          // Build input as messages array (all messages except the last)
+          // Build output as single-element array with the assistant response
+          // This is the format Braintrust's LLM view expects
+          const llmInput: Array<Record<string, unknown>> = []
+          if (state.currentInput) {
+            llmInput.push({ role: "user", content: state.currentInput })
+          }
+          const llmOutput = [assistantMessage]
+          
+          // Create LLM span
+          const llmSpanId = generateUUID()
+          const llmSpan: SpanData = {
+            id: llmSpanId,
+            span_id: llmSpanId,
+            root_span_id: state.rootSpanId,
+            span_parents: [state.currentTurnSpanId],
+            created: new Date(time.created as number).toISOString(),
+            input: llmInput.length > 0 ? llmInput : undefined,
+            output: llmOutput,
+            metrics: {
+              start: time.created as number,
+              end: time.completed as number,
+              prompt_tokens: inputTokens,
+              completion_tokens: outputTokens,
+              tokens: totalTokens,
+            },
+            metadata: {
+              model: modelName,
+              provider: providerID,
+              message_id: messageId,
+            },
+            span_attributes: {
+              name: modelName,
+              type: "llm",
+            },
+          }
+          
+          const rowId = await btClient.insertSpan(llmSpan, log)
+          log("Created LLM span", { 
+            messageId, 
+            modelName, 
+            tokens: totalTokens, 
+            rowId,
+            turnSpanId: state.currentTurnSpanId,
+            outputLength: outputText.length,
+            toolCallsCount: toolCalls?.length || 0,
+          })
         }
         // Close current turn on session.idle (user finished a conversation turn)
         else if (event.type === "session.idle") {
@@ -331,7 +512,12 @@ export function createTracingHooks(
     "tool.execute.before": async (toolInput, output) => {
       const { tool, sessionID, callID } = toolInput
       log("Tool execute before", { tool, sessionID, callID })
-      // We can store timing info here if needed
+      
+      // Store start time for this tool call
+      const state = sessionStates.get(sessionID)
+      if (state) {
+        state.toolStartTimes.set(callID, Date.now())
+      }
     },
 
     "tool.execute.after": async (toolInput, result) => {
@@ -346,8 +532,13 @@ export function createTracingHooks(
 
       state.toolCallCount++
 
+      // Get start time and clean up
+      const startTime = state.toolStartTimes.get(callID)
+      state.toolStartTimes.delete(callID)
+
       // Create tool span
       const toolSpanId = generateUUID()
+      const endTime = Date.now()
       const toolSpan: SpanData = {
         id: generateUUID(),
         span_id: toolSpanId,
@@ -361,7 +552,8 @@ export function createTracingHooks(
           title: result.title,
         },
         metrics: {
-          end: Date.now(),
+          start: startTime,
+          end: endTime,
         },
         span_attributes: {
           name: formatToolName(tool, result.title),
@@ -370,7 +562,7 @@ export function createTracingHooks(
       }
 
       await btClient.insertSpan(toolSpan, log)
-      log("Created tool span", { tool, callID })
+      log("Created tool span", { tool, callID, startTime, endTime })
     },
   }
 }
@@ -380,8 +572,16 @@ export function createTracingHooks(
  */
 function formatToolName(tool: string, title?: string): string {
   if (title) {
+    let displayTitle = title
+    
+    // For file operations, show just the filename instead of full path
+    if ((tool === "read" || tool === "edit") && title.includes("/")) {
+      const parts = title.split("/")
+      displayTitle = parts[parts.length - 1] || title
+    }
+    
     // Truncate long titles
-    const shortTitle = title.length > 50 ? title.substring(0, 47) + "..." : title
+    const shortTitle = displayTitle.length > 50 ? displayTitle.substring(0, 47) + "..." : displayTitle
     return `${tool}: ${shortTitle}`
   }
   return tool

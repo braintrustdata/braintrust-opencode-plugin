@@ -16,15 +16,19 @@
 
 ## Dev Loop
 
-### Running a test
+### Running unit tests
+
+```bash
+bun test
+```
+
+### Running an end-to-end test
 
 Run a simple opencode command to generate a trace:
 
 ```bash
 ./install.sh && BRAINTRUST_DEBUG=true opencode run -m anthropic/claude-3-haiku-20240307 "say hello and nothing else"
 ```
-
-### Querying traces
 
 Use the Braintrust MCP tools to query the project logs. First resolve the project ID:
 

@@ -8,6 +8,8 @@
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun --format esm",
     "dev": "bun run --watch src/index.ts",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/**/*.ts",
     "clean": "rm -rf dist",
