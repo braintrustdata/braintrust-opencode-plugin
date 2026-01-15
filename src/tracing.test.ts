@@ -158,6 +158,9 @@ describe("Event to Span Transformation", () => {
     const sessionId = "ses_multi_tool"
     const messageId = "msg_1"
 
+    // Use explicit timestamps to ensure deterministic ordering
+    // LLM span starts at baseTime, tool spans start later
+    const baseTime = 1000000000000
     await assertEventsProduceTree(
       session(
         sessionId,
@@ -186,7 +189,11 @@ describe("Event to Span Transformation", () => {
           "Edit applied successfully",
         ),
         textPart(sessionId, messageId, "Done! I changed debug from false to true."),
-        messageCompleted(sessionId, messageId, { tokens: { input: 30, output: 12 } }),
+        // Use explicit time to ensure LLM span sorts first (earlier start time)
+        messageCompleted(sessionId, messageId, {
+          tokens: { input: 30, output: 12 },
+          time: { created: baseTime, completed: baseTime + 500 },
+        }),
         sessionIdle(sessionId),
       ),
       {
@@ -195,7 +202,8 @@ describe("Event to Span Transformation", () => {
           {
             span_attributes: { name: "Turn 1", type: "task" },
             children: [
-              // LLM span comes first due to earlier time.created timestamp
+              // LLM span comes first due to earlier time.created timestamp (baseTime)
+              // Tool spans use Date.now() which is > baseTime
               {
                 span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
                 metrics: { prompt_tokens: 30, completion_tokens: 12, tokens: 42 },

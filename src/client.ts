@@ -59,13 +59,18 @@ interface InsertResponse {
 }
 
 export function loadConfig(): BraintrustConfig {
+  // TRACE_TO_BRAINTRUST env var controls tracing (matches Claude Code plugin)
+  // Default is false (tracing disabled) - must explicitly opt-in
+  const envTracing = process.env.TRACE_TO_BRAINTRUST
+  const tracingEnabled = envTracing === "true"
+
   return {
     apiKey: process.env.BRAINTRUST_API_KEY || "",
     apiUrl: process.env.BRAINTRUST_API_URL,
     appUrl: process.env.BRAINTRUST_APP_URL || "https://www.braintrust.dev",
     orgName: process.env.BRAINTRUST_ORG_NAME,
     projectName: process.env.BRAINTRUST_PROJECT || "opencode",
-    tracingEnabled: process.env.BRAINTRUST_TRACING !== "false",
+    tracingEnabled,
     debug: process.env.BRAINTRUST_DEBUG === "true",
   }
 }

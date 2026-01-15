@@ -13,6 +13,7 @@ import { createTracingHooks } from "./tracing"
 
 export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   const { client } = input
+
   const config = loadConfig()
 
   // Create Braintrust client but don't initialize yet (lazy initialization)

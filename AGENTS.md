@@ -14,6 +14,32 @@
    export BRAINTRUST_DEBUG=true                   # optional: enables debug logging
    ```
 
+## Configuration
+
+You can configure the plugin in your `opencode.json`:
+
+```json
+{
+  "braintrust": {
+    "trace_to_braintrust": true
+  }
+}
+```
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `trace_to_braintrust` | boolean | `false` | Enable/disable tracing to Braintrust |
+
+### Environment Variable Override
+
+Set `TRACE_TO_BRAINTRUST=true` to enable tracing:
+
+```bash
+TRACE_TO_BRAINTRUST=true opencode
+```
+
 ## Dev Loop
 
 ### Running unit tests

@@ -79,7 +79,7 @@ BRAINTRUST_PROJECT=my-awesome-project
 To use only the data access tools without automatic tracing:
 
 ```bash
-BRAINTRUST_TRACING=false
+TRACE_TO_BRAINTRUST=false
 ```
 
 ### Debug Mode

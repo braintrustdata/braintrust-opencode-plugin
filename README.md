@@ -82,7 +82,7 @@ export BRAINTRUST_API_KEY="your-api-key"
 
 # Optional
 export BRAINTRUST_PROJECT="opencode"           # Project name (default: "opencode")
-export BRAINTRUST_TRACING="true"               # Enable/disable tracing (default: true)
+export TRACE_TO_BRAINTRUST="true"              # Enable/disable tracing (default: false)
 export BRAINTRUST_DEBUG="false"                # Enable debug logging (default: false)
 export BRAINTRUST_APP_URL="https://www.braintrust.dev"  # Braintrust app URL
 export BRAINTRUST_ORG_NAME="your-org"          # Organization name (if multiple orgs)
