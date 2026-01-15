@@ -27,7 +27,7 @@ Custom tools available to the AI assistant:
 # 1. Clone and install
 git clone https://github.com/braintrustdata/opencode-braintrust
 cd opencode-braintrust
-./install.sh
+./install.sh # NOTE: requires bun to build the plugin. https://bun.sh/
 
 # 2. Set your API key
 export BRAINTRUST_API_KEY="your-api-key"
