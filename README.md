@@ -31,6 +31,7 @@ cd opencode-braintrust
 
 # 2. Set your API key
 export BRAINTRUST_API_KEY="your-api-key"
+export TRACE_TO_BRAINTRUST="true"
 
 # 3. Run OpenCode
 opencode
