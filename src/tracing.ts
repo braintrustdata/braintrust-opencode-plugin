@@ -295,6 +295,17 @@ export function createTracingHooks(
           const modelID = (messageInfo.modelID as string) || "unknown"
           const modelName = `${providerID}/${modelID}`
 
+          // Extract error info if present
+          const msgError = messageInfo.error as
+            | { name?: string; data?: { message?: string } }
+            | undefined
+          let llmErrorString: string | undefined
+          if (msgError) {
+            const errorName = msgError.name || "UnknownError"
+            const errorMessage = msgError.data?.message || errorName
+            llmErrorString = `${errorMessage}\n\ntype: ${errorName}`
+          }
+
           // Get output text and tool calls from tracked parts
           const outputText = state.llmOutputParts.get(messageId) || ""
           const toolCalls = state.llmToolCalls.get(messageId)
@@ -327,6 +338,7 @@ export function createTracingHooks(
             created: new Date(time.created as number).toISOString(),
             input: llmInput.length > 0 ? llmInput : undefined,
             output: llmOutput,
+            error: llmErrorString,
             metrics: {
               start: time.created as number,
               end: time.completed as number,
@@ -354,6 +366,7 @@ export function createTracingHooks(
             turnSpanId: state.currentTurnSpanId,
             outputLength: outputText.length,
             toolCallsCount: toolCalls?.length || 0,
+            hasError: !!llmErrorString,
           })
         }
         // Close current turn on session.idle (user finished a conversation turn)
@@ -440,6 +453,66 @@ export function createTracingHooks(
             await btClient.insertSpan(span, log)
             sessionStates.delete(sessionKey)
             log("Session span closed", { sessionKey })
+          }
+        } else if (event.type === "session.error") {
+          const errorSessionID = props.sessionID as string
+          if (!errorSessionID) {
+            log("session.error but no session ID found")
+            return
+          }
+
+          const sessionKey = String(errorSessionID)
+          const state = sessionStates.get(sessionKey)
+
+          if (state) {
+            const now = Date.now()
+
+            // Extract error info from event.properties
+            // Error structure: { name: "ErrorType", data: { message?: string, ... } }
+            const errorObj = props.error as
+              | { name?: string; data?: { message?: string } }
+              | undefined
+            const errorName = errorObj?.name || "UnknownError"
+            const errorMessage = errorObj?.data?.message || errorName
+
+            // Format error string similar to Braintrust SDK pattern: "message\n\ntype: ErrorType"
+            const errorString = `${errorMessage}\n\ntype: ${errorName}`
+
+            log("Handling session error", { sessionKey, errorName, errorMessage })
+
+            // Close current turn span with error if exists
+            if (state.currentTurnSpanId) {
+              const turnSpan: SpanData = {
+                id: state.currentTurnSpanId,
+                span_id: state.currentTurnSpanId,
+                root_span_id: state.rootSpanId,
+                output: state.currentOutput || undefined,
+                error: errorString,
+                metrics: { end: now },
+                _is_merge: true,
+              }
+              await btClient.insertSpan(turnSpan, log)
+            }
+
+            // Close root span with error and metadata
+            const rootSpan: SpanData = {
+              id: state.rootSpanId,
+              span_id: state.rootSpanId,
+              root_span_id: state.rootSpanId,
+              error: errorString,
+              metrics: { end: now },
+              metadata: {
+                total_turns: state.turnNumber,
+                total_tool_calls: state.toolCallCount,
+                error_type: errorName,
+              },
+              _is_merge: true,
+            }
+            await btClient.insertSpan(rootSpan, log)
+
+            // Clean up session state
+            sessionStates.delete(sessionKey)
+            log("Session error handled", { sessionKey, errorName, errorMessage })
           }
         } else {
           log(`unhandled event ${event.type}`)

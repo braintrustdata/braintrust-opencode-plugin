@@ -21,6 +21,7 @@ export interface SpanData {
   input?: unknown
   output?: unknown
   expected?: unknown
+  error?: string
   scores?: Record<string, number>
   metadata?: Record<string, unknown>
   metrics?: {

@@ -48,13 +48,31 @@ TRACE_TO_BRAINTRUST=true opencode
 bun test
 ```
 
-### Running an end-to-end test
+### Running end-to-end tests
+
+#### Happy path (successful session)
 
 Run a simple opencode command to generate a trace:
 
 ```bash
-./install.sh && BRAINTRUST_DEBUG=true opencode run -m anthropic/claude-3-haiku-20240307 "say hello and nothing else"
+./install.sh && TRACE_TO_BRAINTRUST=true BRAINTRUST_DEBUG=true opencode run -m anthropic/claude-3-haiku-20240307 "say hello and nothing else"
 ```
+
+#### Error path (session error)
+
+Trigger a session error by using an invalid API key:
+
+```bash
+./install.sh && ANTHROPIC_API_KEY=invalid-key TRACE_TO_BRAINTRUST=true BRAINTRUST_DEBUG=true opencode run -m anthropic/claude-3-haiku-20240307 "say hello" 2>&1 || true
+```
+
+Check the debug logs for session.error handling:
+
+```bash
+grep "session.error\|Handling session error\|Session error handled" ~/.local/share/opencode/log/*.log | tail -10
+```
+
+#### Verifying traces in Braintrust
 
 Use the Braintrust MCP tools to query the project logs. First resolve the project ID:
 
@@ -74,10 +92,16 @@ To see all spans in a specific trace, use the `root_span_id`:
 braintrust_query_logs: SELECT id, created, span_id, span_parents, span_attributes, input, output, metrics FROM logs WHERE root_span_id = '<root_span_id>' ORDER BY created ASC
 ```
 
+To find spans with errors:
+
+```
+braintrust_query_logs: SELECT id, created, error, span_attributes FROM logs WHERE error IS NOT NULL ORDER BY created DESC LIMIT 5
+```
+
 ## Project Structure
 
 - `src/index.ts` - Plugin entry point, hooks registration
-- `src/tracing.ts` - Tracing hooks implementation (session, turn, tool spans)
+- `src/tracing.ts` - Tracing hooks implementation (session, turn, tool spans, error handling)
 - `src/client.ts` - Braintrust API client
 - `src/tools.ts` - Braintrust query tools exposed to OpenCode
 
@@ -94,12 +118,6 @@ Session (root span)
     - Tool call
   ...
 ```
-
-## Key Files
-
-- `src/tracing.ts:113-136` - Root span creation (session.created event)
-- `src/tracing.ts:280-348` - Turn span creation (chat.message hook)
-- `src/tracing.ts:357-394` - Tool span creation (tool.execute.after hook)
 
 ## Debug Logs
 
