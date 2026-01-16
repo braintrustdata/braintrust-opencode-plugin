@@ -430,7 +430,8 @@ export function createTracingHooks(
             assistantMessage.tool_calls = toolCalls
           }
           if (reasoningText) {
-            assistantMessage.reasoning = { content: reasoningText }
+            // Braintrust expects reasoning as an array of objects with id and content
+            assistantMessage.reasoning = [{ id: "reasoning", content: reasoningText }]
           }
 
           // Build input as messages array (all messages except the last)

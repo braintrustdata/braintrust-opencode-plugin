@@ -13,6 +13,7 @@ import type {
   EventSessionDeleted,
   EventSessionError,
   EventSessionIdle,
+  ReasoningPart,
   Session,
   TextPart,
   ToolPart,
@@ -189,6 +190,28 @@ export function textPart(
     messageID,
     type: "text",
     text,
+  }
+  return {
+    type: "message.part.updated",
+    properties: { part },
+  }
+}
+
+/**
+ * Create message.part.updated event for reasoning/thinking content
+ */
+export function reasoningPart(
+  sessionID: string,
+  messageID: string,
+  text: string,
+): EventMessagePartUpdated {
+  const part: ReasoningPart = {
+    id: `prt_reasoning_${messageID}`,
+    sessionID,
+    messageID,
+    type: "reasoning",
+    text,
+    time: { start: Date.now() },
   }
   return {
     type: "message.part.updated",

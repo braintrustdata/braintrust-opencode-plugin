@@ -38,9 +38,11 @@ interface SessionState {
     string,
     Array<{ id: string; type: string; function: { name: string; arguments: string } }>
   >
+  llmReasoningParts: Map<string, string> // messageId -> reasoning/thinking text
   processedLlmMessages: Set<string>
   // Tool span tracking
   toolStartTimes: Map<string, number>
+  toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
 }
 
 export interface EventProcessorConfig {
@@ -185,6 +187,11 @@ export class EventProcessor {
     const startTime = state.toolStartTimes.get(callID)
     state.toolStartTimes.delete(callID)
 
+    // Look up reasoning for this tool call via messageId
+    const messageId = state.toolCallMessageIds.get(callID)
+    const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
+    state.toolCallMessageIds.delete(callID)
+
     const toolSpanId = generateUUID()
     const endTime = Date.now()
     const toolSpan: SpanData = {
@@ -198,6 +205,7 @@ export class EventProcessor {
         tool_name: tool,
         call_id: callID,
         title,
+        reasoning: reasoning || undefined,
       },
       metrics: {
         start: startTime,
@@ -258,8 +266,10 @@ export class EventProcessor {
           subagentTitle,
           llmOutputParts: new Map(),
           llmToolCalls: new Map(),
+          llmReasoningParts: new Map(),
           processedLlmMessages: new Set(),
           toolStartTimes: new Map(),
+          toolCallMessageIds: new Map(),
         }
         this.sessionStates.set(sessionID, childState)
 
@@ -306,8 +316,10 @@ export class EventProcessor {
       startTime: Date.now(),
       llmOutputParts: new Map(),
       llmToolCalls: new Map(),
+      llmReasoningParts: new Map(),
       processedLlmMessages: new Set(),
       toolStartTimes: new Map(),
+      toolCallMessageIds: new Map(),
     }
     this.sessionStates.set(sessionKey, state)
 
@@ -394,7 +406,18 @@ export class EventProcessor {
           toolCalls.push(toolCall)
         }
 
+        // Store messageId for this callID so we can look up reasoning later
+        state.toolCallMessageIds.set(callID, messageId)
+
         this.log("Tracking LLM tool call", { messageId, callID, tool })
+      }
+    }
+    // Track reasoning/thinking content for LLM spans
+    else if (part.type === "reasoning" && messageId) {
+      const text = part.text as string
+      if (text) {
+        state.llmReasoningParts.set(messageId, text)
+        this.log("Tracking LLM reasoning part", { messageId, textLength: text.length })
       }
     }
   }
@@ -460,17 +483,22 @@ export class EventProcessor {
     const modelID = (messageInfo.modelID as string) || "unknown"
     const modelName = `${providerID}/${modelID}`
 
-    // Get output text and tool calls from tracked parts
+    // Get output text, tool calls, and reasoning from tracked parts
     const outputText = state.llmOutputParts.get(messageId) || ""
     const toolCalls = state.llmToolCalls.get(messageId)
+    const reasoningText = state.llmReasoningParts.get(messageId)
 
-    // Build assistant message object
+    // Build assistant message object - include tool_calls and reasoning if present
     const assistantMessage: Record<string, unknown> = {
       role: "assistant",
       content: outputText,
     }
     if (toolCalls && toolCalls.length > 0) {
       assistantMessage.tool_calls = toolCalls
+    }
+    if (reasoningText) {
+      // Braintrust expects reasoning as an array of objects with id and content
+      assistantMessage.reasoning = [{ id: "reasoning", content: reasoningText }]
     }
 
     // Build input/output in Braintrust's expected format
@@ -496,6 +524,7 @@ export class EventProcessor {
         prompt_tokens: inputTokens,
         completion_tokens: outputTokens,
         tokens: totalTokens,
+        reasoning_tokens: reasoningTokens || undefined,
       },
       metadata: {
         model: modelName,

@@ -4,12 +4,14 @@
  * Uses real OpenCode SDK events
  */
 
-import { describe, it } from "bun:test"
+import { describe, expect, it } from "bun:test"
 import {
   assertEventsProduceTree,
   chatMessage,
   childSessionCreated,
+  eventsToTree,
   messageCompleted,
+  reasoningPart,
   session,
   sessionCreated,
   sessionError,
@@ -382,5 +384,71 @@ describe("Subagents (Child Sessions)", () => {
         ],
       },
     )
+  })
+})
+
+describe("Reasoning/Thinking Content", () => {
+  it("LLM span includes reasoning content in output", async () => {
+    const sessionId = "ses_reasoning"
+    const messageId = "msg_1"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Think about this problem"),
+        // Model produces reasoning/thinking first
+        reasoningPart(sessionId, messageId, "Let me think step by step about this problem..."),
+        // Then produces the actual response
+        textPart(sessionId, messageId, "Here is my answer."),
+        messageCompleted(sessionId, messageId, {
+          tokens: { input: 10, output: 5 },
+        }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    // Find the LLM span
+    const turnSpan = tree?.children[0]
+    const llmSpan = turnSpan?.children[0]
+
+    expect(llmSpan?.type).toBe("llm")
+
+    // Check that reasoning is included in the output
+    // Braintrust expects reasoning as an array of objects with id and content
+    const output = llmSpan?.output as Array<{ reasoning?: Array<{ id: string; content: string }> }>
+    expect(output).toBeDefined()
+    expect(output[0]?.reasoning?.[0]?.content).toBe(
+      "Let me think step by step about this problem...",
+    )
+  })
+
+  it("tool span includes reasoning in metadata", async () => {
+    const sessionId = "ses_tool_reasoning"
+    const messageId = "msg_1"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Read the file"),
+        // Model thinks about what to do
+        reasoningPart(sessionId, messageId, "I need to read the config file to understand..."),
+        // Then calls a tool
+        toolCallPart(sessionId, messageId, "call_1", "read", { filePath: "/config.ts" }),
+        toolExecute("call_1", "read", "/config.ts", { filePath: "/config.ts" }, "file contents"),
+        textPart(sessionId, messageId, "I read the file."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 15, output: 8 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    // Find the tool span
+    const turnSpan = tree?.children[0]
+    // Tool spans and LLM span are children of turn - find the tool one
+    const toolSpan = turnSpan?.children.find((c) => c.type === "tool")
+
+    expect(toolSpan?.type).toBe("tool")
+    expect(toolSpan?.metadata?.reasoning).toBe("I need to read the config file to understand...")
   })
 })
