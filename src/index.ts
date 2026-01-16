@@ -7,14 +7,44 @@
  */
 
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
-import { BraintrustClient, loadConfig } from "./client"
+import { BraintrustClient, loadConfig, type PluginConfig } from "./client"
 import { createBraintrustTools } from "./tools"
 import { createTracingHooks } from "./tracing"
 
 export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   const { client } = input
 
-  const config = loadConfig()
+  // Load plugin config from config files
+  // Precedence: global config -> project config (project overrides global)
+  let pluginConfig: PluginConfig | undefined
+  try {
+    const fs = await import("fs")
+    const path = await import("path")
+    const os = await import("os")
+
+    // Load configs in order: global first, then project (so project overrides global)
+    const configPaths = [
+      path.join(os.homedir(), ".config", "opencode", "braintrust.json"), // global
+      path.join(input.directory, ".opencode", "braintrust.json"), // project
+    ]
+
+    for (const configPath of configPaths) {
+      try {
+        if (fs.existsSync(configPath)) {
+          const content = fs.readFileSync(configPath, "utf-8")
+          const parsed = JSON.parse(content) as PluginConfig
+          // Merge: later config overrides earlier
+          pluginConfig = pluginConfig ? { ...pluginConfig, ...parsed } : parsed
+        }
+      } catch {
+        // Continue to next path
+      }
+    }
+  } catch {
+    // Config loading failed, proceed with env vars only
+  }
+
+  const config = loadConfig(pluginConfig)
 
   // Create Braintrust client but don't initialize yet (lazy initialization)
   let btClient: BraintrustClient | undefined
@@ -93,4 +123,4 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 export default BraintrustPlugin
 
 // Re-export types only (not the class, since OpenCode will try to call all exports as plugins)
-export type { BraintrustClient, BraintrustConfig } from "./client"
+export type { BraintrustClient, BraintrustConfig, PluginConfig } from "./client"

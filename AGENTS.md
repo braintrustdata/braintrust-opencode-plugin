@@ -16,29 +16,51 @@
 
 ## Configuration
 
-You can configure the plugin in your `opencode.json`:
+You can configure the plugin using a config file or environment variables.
+
+### Config File
+
+Create a `braintrust.json` file in one of these locations:
+- `.opencode/braintrust.json` - Project-level config
+- `~/.config/opencode/braintrust.json` - Global config
 
 ```json
 {
-  "braintrust": {
-    "trace_to_braintrust": true
-  }
+  "trace_to_braintrust": true,
+  "project": "my-project",
+  "debug": true
 }
 ```
 
 ### Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `trace_to_braintrust` | boolean | `false` | Enable/disable tracing to Braintrust |
+| Config Key | Env Var | Type | Default | Description |
+|------------|---------|------|---------|-------------|
+| `trace_to_braintrust` | `TRACE_TO_BRAINTRUST` | boolean | `false` | Enable/disable tracing |
+| `project` | `BRAINTRUST_PROJECT` | string | `"opencode"` | Project name for traces |
+| `debug` | `BRAINTRUST_DEBUG` | boolean | `false` | Enable debug logging |
+| `api_key` | `BRAINTRUST_API_KEY` | string | | API key for authentication |
+| `api_url` | `BRAINTRUST_API_URL` | string | | API URL override |
+| `app_url` | `BRAINTRUST_APP_URL` | string | `"https://www.braintrust.dev"` | App URL |
+| `org_name` | `BRAINTRUST_ORG_NAME` | string | | Organization name |
+
+### Precedence
+
+Configuration is loaded with the following precedence (later overrides earlier):
+1. Default values
+2. `~/.config/opencode/braintrust.json` (global config)
+3. `.opencode/braintrust.json` (project config)
+4. Environment variables (highest priority)
 
 ### Environment Variable Override
 
-Set `TRACE_TO_BRAINTRUST=true` to enable tracing:
+Environment variables override config file settings. This is useful for per-run overrides:
 
 ```bash
 TRACE_TO_BRAINTRUST=true opencode
 ```
+
+Boolean environment variables accept `true`, `TRUE`, `1` (case-insensitive) as truthy values.
 
 ## Dev Loop
 

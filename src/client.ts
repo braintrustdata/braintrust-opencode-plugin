@@ -12,6 +12,20 @@ export interface BraintrustConfig {
   debug: boolean
 }
 
+/**
+ * Plugin config from opencode.json `braintrust` section.
+ * Uses snake_case to match environment variable naming.
+ */
+export interface PluginConfig {
+  api_key?: string
+  api_url?: string
+  app_url?: string
+  org_name?: string
+  project?: string
+  trace_to_braintrust?: boolean
+  debug?: boolean
+}
+
 export interface SpanData {
   id: string
   span_id: string
@@ -70,15 +84,52 @@ export function parseBooleanEnv(value: string | undefined): boolean {
   return normalized === "true" || normalized === "1"
 }
 
-export function loadConfig(): BraintrustConfig {
+/**
+ * Load Braintrust config with the following precedence (later overrides earlier):
+ * 1. Default values
+ * 2. opencode.json `braintrust` section (pluginConfig)
+ * 3. Environment variables (highest priority)
+ */
+export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
+  // Defaults
+  const defaults: BraintrustConfig = {
+    apiKey: "",
+    apiUrl: undefined,
+    appUrl: "https://www.braintrust.dev",
+    orgName: undefined,
+    projectName: "opencode",
+    tracingEnabled: false,
+    debug: false,
+  }
+
+  // Layer 1: Apply opencode.json config (if provided)
+  if (pluginConfig) {
+    if (pluginConfig.api_key) defaults.apiKey = pluginConfig.api_key
+    if (pluginConfig.api_url) defaults.apiUrl = pluginConfig.api_url
+    if (pluginConfig.app_url) defaults.appUrl = pluginConfig.app_url
+    if (pluginConfig.org_name) defaults.orgName = pluginConfig.org_name
+    if (pluginConfig.project) defaults.projectName = pluginConfig.project
+    if (pluginConfig.trace_to_braintrust !== undefined) {
+      defaults.tracingEnabled = pluginConfig.trace_to_braintrust
+    }
+    if (pluginConfig.debug !== undefined) {
+      defaults.debug = pluginConfig.debug
+    }
+  }
+
+  // Layer 2: Apply environment variables (override opencode.json)
   return {
-    apiKey: process.env.BRAINTRUST_API_KEY || "",
-    apiUrl: process.env.BRAINTRUST_API_URL,
-    appUrl: process.env.BRAINTRUST_APP_URL || "https://www.braintrust.dev",
-    orgName: process.env.BRAINTRUST_ORG_NAME,
-    projectName: process.env.BRAINTRUST_PROJECT || "opencode",
-    tracingEnabled: parseBooleanEnv(process.env.TRACE_TO_BRAINTRUST),
-    debug: parseBooleanEnv(process.env.BRAINTRUST_DEBUG),
+    apiKey: process.env.BRAINTRUST_API_KEY || defaults.apiKey,
+    apiUrl: process.env.BRAINTRUST_API_URL || defaults.apiUrl,
+    appUrl: process.env.BRAINTRUST_APP_URL || defaults.appUrl,
+    orgName: process.env.BRAINTRUST_ORG_NAME || defaults.orgName,
+    projectName: process.env.BRAINTRUST_PROJECT || defaults.projectName,
+    tracingEnabled: process.env.TRACE_TO_BRAINTRUST
+      ? parseBooleanEnv(process.env.TRACE_TO_BRAINTRUST)
+      : defaults.tracingEnabled,
+    debug: process.env.BRAINTRUST_DEBUG
+      ? parseBooleanEnv(process.env.BRAINTRUST_DEBUG)
+      : defaults.debug,
   }
 }
 
