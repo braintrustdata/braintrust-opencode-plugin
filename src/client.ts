@@ -59,20 +59,26 @@ interface InsertResponse {
   row_ids: string[]
 }
 
-export function loadConfig(): BraintrustConfig {
-  // TRACE_TO_BRAINTRUST env var controls tracing (matches Claude Code plugin)
-  // Default is false (tracing disabled) - must explicitly opt-in
-  const envTracing = process.env.TRACE_TO_BRAINTRUST
-  const tracingEnabled = envTracing === "true"
+/**
+ * Parse a boolean environment variable.
+ * Accepts: "true", "TRUE", "1", "tRuE" (case-insensitive) as truthy.
+ * All other values (including undefined, "false", "0", "no") are falsy.
+ */
+export function parseBooleanEnv(value: string | undefined): boolean {
+  if (!value) return false
+  const normalized = value.toLowerCase()
+  return normalized === "true" || normalized === "1"
+}
 
+export function loadConfig(): BraintrustConfig {
   return {
     apiKey: process.env.BRAINTRUST_API_KEY || "",
     apiUrl: process.env.BRAINTRUST_API_URL,
     appUrl: process.env.BRAINTRUST_APP_URL || "https://www.braintrust.dev",
     orgName: process.env.BRAINTRUST_ORG_NAME,
     projectName: process.env.BRAINTRUST_PROJECT || "opencode",
-    tracingEnabled,
-    debug: process.env.BRAINTRUST_DEBUG === "true",
+    tracingEnabled: parseBooleanEnv(process.env.TRACE_TO_BRAINTRUST),
+    debug: parseBooleanEnv(process.env.BRAINTRUST_DEBUG),
   }
 }
 
