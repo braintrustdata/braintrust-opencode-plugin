@@ -94,7 +94,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
   // Defaults
   const defaults: BraintrustConfig = {
     apiKey: "",
-    apiUrl: undefined,
+    apiUrl: "https://api.braintrust.dev",
     appUrl: "https://www.braintrust.dev",
     orgName: undefined,
     projectName: "opencode",

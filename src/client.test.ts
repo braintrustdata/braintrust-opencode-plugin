@@ -83,7 +83,7 @@ describe("loadConfig", () => {
     it("uses default values when no config provided", () => {
       const config = loadConfig()
       expect(config.apiKey).toBe("")
-      expect(config.apiUrl).toBeUndefined()
+      expect(config.apiUrl).toBe("https://api.braintrust.dev")
       expect(config.appUrl).toBe("https://www.braintrust.dev")
       expect(config.orgName).toBeUndefined()
       expect(config.projectName).toBe("opencode")

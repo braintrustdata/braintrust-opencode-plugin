@@ -93,25 +93,7 @@ Create a `braintrust.json` file in one of these locations:
 }
 ```
 
-### Environment Variables
-
-Environment variables can also be used and will override config file settings:
-
-```bash
-# Required
-export BRAINTRUST_API_KEY="your-api-key"
-
-# Optional
-export BRAINTRUST_PROJECT="opencode"           # Project name (default: "opencode")
-export TRACE_TO_BRAINTRUST="true"              # Enable/disable tracing (default: false)
-export BRAINTRUST_DEBUG="false"                # Enable debug logging (default: false)
-export BRAINTRUST_APP_URL="https://www.braintrust.dev"  # Braintrust app URL
-export BRAINTRUST_ORG_NAME="your-org"          # Organization name (if multiple orgs)
-```
-
-Boolean environment variables accept `true`, `TRUE`, `1` (case-insensitive) as truthy values.
-
-### Options Reference
+### Config Options
 
 | Config Key | Env Var | Type | Default | Description |
 |------------|---------|------|---------|-------------|
@@ -119,7 +101,7 @@ Boolean environment variables accept `true`, `TRUE`, `1` (case-insensitive) as t
 | `project` | `BRAINTRUST_PROJECT` | string | `"opencode"` | Project name for traces |
 | `debug` | `BRAINTRUST_DEBUG` | boolean | `false` | Enable debug logging |
 | `api_key` | `BRAINTRUST_API_KEY` | string | | API key for authentication |
-| `api_url` | `BRAINTRUST_API_URL` | string | | API URL override |
+| `api_url` | `BRAINTRUST_API_URL` | string | `"https://api.braintrust.dev"` | API URL |
 | `app_url` | `BRAINTRUST_APP_URL` | string | `"https://www.braintrust.dev"` | App URL |
 | `org_name` | `BRAINTRUST_ORG_NAME` | string | | Organization name |
 

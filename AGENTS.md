@@ -40,7 +40,7 @@ Create a `braintrust.json` file in one of these locations:
 | `project` | `BRAINTRUST_PROJECT` | string | `"opencode"` | Project name for traces |
 | `debug` | `BRAINTRUST_DEBUG` | boolean | `false` | Enable debug logging |
 | `api_key` | `BRAINTRUST_API_KEY` | string | | API key for authentication |
-| `api_url` | `BRAINTRUST_API_URL` | string | | API URL override |
+| `api_url` | `BRAINTRUST_API_URL` | string | `"https://api.braintrust.dev"` | API URL |
 | `app_url` | `BRAINTRUST_APP_URL` | string | `"https://www.braintrust.dev"` | App URL |
 | `org_name` | `BRAINTRUST_ORG_NAME` | string | | Organization name |
 
