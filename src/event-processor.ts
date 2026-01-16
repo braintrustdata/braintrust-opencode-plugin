@@ -17,6 +17,7 @@ function generateUUID(): string {
 // State management for tracing
 interface SessionState {
   rootSpanId: string
+  effectiveRootSpanId: string // For child sessions, this is the parent's root span ID; otherwise same as rootSpanId
   currentTurnSpanId?: string
   turnNumber: number
   toolCallCount: number
@@ -25,6 +26,11 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  // Parent-child session tracking (for subagents)
+  parentSessionId?: string // If this is a child session, the parent's session ID
+  parentRootSpanId?: string // The parent's root span ID (child spans link to this as root)
+  parentTurnSpanId?: string // The parent's turn span ID (child's root span is a child of this)
+  subagentTitle?: string // Title for subagent spans (e.g., "{subagent_type}: {description}")
   // LLM span tracking
   currentAssistantMessageId?: string
   llmOutputParts: Map<string, string>
@@ -71,7 +77,7 @@ export class EventProcessor {
     const sessionID = (props.sessionID as string) || (info?.id as string) || (props.id as string)
 
     if (event.type === "session.created") {
-      await this.handleSessionCreated(sessionID)
+      await this.handleSessionCreated(info)
     } else if (event.type === "message.part.updated") {
       await this.handleMessagePartUpdated(props)
     } else if (event.type === "message.updated") {
@@ -80,6 +86,8 @@ export class EventProcessor {
       await this.handleSessionIdle(sessionID)
     } else if (event.type === "session.deleted") {
       await this.handleSessionDeleted(sessionID)
+    } else if (event.type === "session.error") {
+      await this.handleSessionError(props)
     }
   }
 
@@ -102,7 +110,7 @@ export class EventProcessor {
       const prevTurnSpan: SpanData = {
         id: state.currentTurnSpanId,
         span_id: state.currentTurnSpanId,
-        root_span_id: state.rootSpanId,
+        root_span_id: state.effectiveRootSpanId,
         output: state.currentOutput || undefined,
         metrics: {
           end: Date.now(),
@@ -124,7 +132,7 @@ export class EventProcessor {
     const turnSpan: SpanData = {
       id: state.currentTurnSpanId,
       span_id: state.currentTurnSpanId,
-      root_span_id: state.rootSpanId,
+      root_span_id: state.effectiveRootSpanId,
       span_parents: [state.rootSpanId],
       created: new Date(now).toISOString(),
       input: userMessage || undefined,
@@ -182,7 +190,7 @@ export class EventProcessor {
     const toolSpan: SpanData = {
       id: generateUUID(),
       span_id: toolSpanId,
-      root_span_id: state.rootSpanId,
+      root_span_id: state.effectiveRootSpanId,
       span_parents: [state.currentTurnSpanId],
       input: metadata,
       output: typeof output === "string" ? output.substring(0, 10000) : output,
@@ -205,7 +213,84 @@ export class EventProcessor {
     this.log("Created tool span", { tool, callID })
   }
 
-  private async handleSessionCreated(sessionID: string | undefined): Promise<void> {
+  private async handleSessionCreated(
+    sessionInfo: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const sessionID = sessionInfo?.id as string
+    const parentSessionID = sessionInfo?.parentID as string
+
+    // Handle child session (subagent) - link to parent trace
+    if (sessionID && parentSessionID) {
+      const parentState = this.sessionStates.get(parentSessionID)
+      if (parentState) {
+        // Extract subagent title from session title
+        // OpenCode format: "{description} (@{agent.name} subagent)"
+        // We want: "{agent.name}: {description}"
+        const sessionTitle = sessionInfo?.title as string | undefined
+        let subagentTitle = sessionTitle || "Subagent"
+        if (sessionTitle) {
+          const match = sessionTitle.match(/^(.+?)\s+\(@(\w+)\s+subagent\)$/)
+          if (match) {
+            const [, description, agentType] = match
+            subagentTitle = `${agentType}: ${description}`
+          }
+        }
+
+        this.log("Child session created, linking to parent", {
+          sessionID,
+          parentSessionID,
+          parentRootSpanId: parentState.rootSpanId,
+          parentTurnSpanId: parentState.currentTurnSpanId,
+          subagentTitle,
+        })
+
+        // Create child session state with parent linking info
+        const rootSpanId = generateUUID()
+        const childState: SessionState = {
+          rootSpanId,
+          effectiveRootSpanId: parentState.effectiveRootSpanId, // Use parent's effective root for trace linking
+          turnNumber: 0,
+          toolCallCount: 0,
+          startTime: Date.now(),
+          parentSessionId: parentSessionID,
+          parentRootSpanId: parentState.effectiveRootSpanId,
+          parentTurnSpanId: parentState.currentTurnSpanId,
+          subagentTitle,
+          llmOutputParts: new Map(),
+          llmToolCalls: new Map(),
+          processedLlmMessages: new Set(),
+          toolStartTimes: new Map(),
+        }
+        this.sessionStates.set(sessionID, childState)
+
+        // Create root span for child session, linked to parent's trace
+        const root_span: SpanData = {
+          id: rootSpanId,
+          span_id: rootSpanId,
+          root_span_id: parentState.effectiveRootSpanId, // Link to parent's trace
+          span_parents: parentState.currentTurnSpanId ? [parentState.currentTurnSpanId] : undefined, // Child of parent's turn
+          created: new Date(childState.startTime).toISOString(),
+          metadata: {
+            session_id: sessionID,
+            parent_session_id: parentSessionID,
+            is_subagent: true,
+          },
+          metrics: {
+            start: childState.startTime,
+          },
+          span_attributes: {
+            name: subagentTitle,
+            type: "task",
+          },
+        }
+
+        await this.spanSink.insertSpan(root_span)
+        this.log("Created child session root span", { rootSpanId })
+        return
+      }
+    }
+
+    // Handle regular (parent) session creation
     if (!sessionID) {
       this.log("No session ID found, skipping trace creation")
       return
@@ -215,6 +300,7 @@ export class EventProcessor {
     const rootSpanId = generateUUID()
     const state: SessionState = {
       rootSpanId,
+      effectiveRootSpanId: rootSpanId, // For root sessions, effective root is self
       turnNumber: 0,
       toolCallCount: 0,
       startTime: Date.now(),
@@ -399,7 +485,7 @@ export class EventProcessor {
     const llmSpan: SpanData = {
       id: llmSpanId,
       span_id: llmSpanId,
-      root_span_id: state.rootSpanId,
+      root_span_id: state.effectiveRootSpanId,
       span_parents: [state.currentTurnSpanId],
       created: new Date(time.created as number).toISOString(),
       input: llmInput.length > 0 ? llmInput : undefined,
@@ -435,24 +521,57 @@ export class EventProcessor {
     const sessionKey = String(sessionID)
     const state = this.sessionStates.get(sessionKey)
 
-    if (state?.currentTurnSpanId) {
+    if (state) {
       const now = Date.now()
-      const turnSpan: SpanData = {
-        id: state.currentTurnSpanId,
-        span_id: state.currentTurnSpanId,
-        root_span_id: state.rootSpanId,
-        output: state.currentOutput || undefined,
-        metrics: {
-          end: now,
-        },
-        _is_merge: true,
+      const isChildSession = !!state.parentSessionId
+
+      // Close current turn span if exists
+      if (state.currentTurnSpanId) {
+        const turnSpan: SpanData = {
+          id: state.currentTurnSpanId,
+          span_id: state.currentTurnSpanId,
+          root_span_id: state.effectiveRootSpanId,
+          output: state.currentOutput || undefined,
+          metrics: {
+            end: now,
+          },
+          _is_merge: true,
+        }
+        await this.spanSink.insertSpan(turnSpan)
+        state.currentTurnSpanId = undefined
+        state.currentInput = undefined
+        state.currentOutput = undefined
+        state.currentTurnStartTime = undefined
+        this.log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
       }
-      await this.spanSink.insertSpan(turnSpan)
-      state.currentTurnSpanId = undefined
-      state.currentInput = undefined
-      state.currentOutput = undefined
-      state.currentTurnStartTime = undefined
-      this.log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
+
+      // For child sessions (subagents), also close the root span since they don't get session.deleted
+      if (isChildSession && state.rootSpanId) {
+        this.log("Closing child session root span on idle", {
+          sessionKey,
+          parentSessionId: state.parentSessionId,
+          rootSpanId: state.rootSpanId,
+        })
+
+        const rootSpan: SpanData = {
+          id: state.rootSpanId,
+          span_id: state.rootSpanId,
+          root_span_id: state.effectiveRootSpanId,
+          metrics: {
+            end: now,
+          },
+          metadata: {
+            total_turns: state.turnNumber,
+            total_tool_calls: state.toolCallCount,
+          },
+          _is_merge: true,
+        }
+        await this.spanSink.insertSpan(rootSpan)
+
+        // Clean up child session state
+        this.sessionStates.delete(sessionKey)
+        this.log("Child session closed", { sessionKey })
+      }
     }
   }
 
@@ -466,13 +585,14 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
+      const now = Date.now()
+
       // Close current turn span if exists
       if (state.currentTurnSpanId) {
-        const now = Date.now()
         const turnSpan: SpanData = {
           id: state.currentTurnSpanId,
           span_id: state.currentTurnSpanId,
-          root_span_id: state.rootSpanId,
+          root_span_id: state.effectiveRootSpanId,
           output: state.currentOutput || undefined,
           metrics: {
             end: now,
@@ -486,9 +606,9 @@ export class EventProcessor {
       const span: SpanData = {
         id: state.rootSpanId,
         span_id: state.rootSpanId,
-        root_span_id: state.rootSpanId,
+        root_span_id: state.effectiveRootSpanId,
         metrics: {
-          end: Date.now(),
+          end: now,
         },
         metadata: {
           total_turns: state.turnNumber,
@@ -499,6 +619,66 @@ export class EventProcessor {
       await this.spanSink.insertSpan(span)
       this.sessionStates.delete(sessionKey)
       this.log("Session span closed", { sessionKey })
+    }
+  }
+
+  private async handleSessionError(props: Record<string, unknown>): Promise<void> {
+    const sessionID = props.sessionID as string
+    if (!sessionID) {
+      this.log("session.error but no session ID found")
+      return
+    }
+
+    const sessionKey = String(sessionID)
+    const state = this.sessionStates.get(sessionKey)
+
+    if (state) {
+      const now = Date.now()
+
+      // Extract error info from event.properties
+      // Error structure: { name: "ErrorType", data: { message?: string, ... } }
+      const errorObj = props.error as { name?: string; data?: { message?: string } } | undefined
+      const errorName = errorObj?.name || "UnknownError"
+      const errorMessage = errorObj?.data?.message || errorName
+
+      // Format error string similar to Braintrust SDK pattern: "message\n\ntype: ErrorType"
+      const errorString = `${errorMessage}\n\ntype: ${errorName}`
+
+      this.log("Handling session error", { sessionKey, errorName, errorMessage })
+
+      // Close current turn span with error if exists
+      if (state.currentTurnSpanId) {
+        const turnSpan: SpanData = {
+          id: state.currentTurnSpanId,
+          span_id: state.currentTurnSpanId,
+          root_span_id: state.effectiveRootSpanId,
+          output: state.currentOutput || undefined,
+          error: errorString,
+          metrics: { end: now },
+          _is_merge: true,
+        }
+        await this.spanSink.insertSpan(turnSpan)
+      }
+
+      // Close root span with error and metadata
+      const rootSpan: SpanData = {
+        id: state.rootSpanId,
+        span_id: state.rootSpanId,
+        root_span_id: state.effectiveRootSpanId,
+        error: errorString,
+        metrics: { end: now },
+        metadata: {
+          total_turns: state.turnNumber,
+          total_tool_calls: state.toolCallCount,
+          error_type: errorName,
+        },
+        _is_merge: true,
+      }
+      await this.spanSink.insertSpan(rootSpan)
+
+      // Clean up session state
+      this.sessionStates.delete(sessionKey)
+      this.log("Session error handled", { sessionKey, errorName, errorMessage })
     }
   }
 

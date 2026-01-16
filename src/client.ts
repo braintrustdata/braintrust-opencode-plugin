@@ -44,6 +44,7 @@ export interface SpanData {
     prompt_tokens?: number
     completion_tokens?: number
     tokens?: number
+    reasoning_tokens?: number
   }
   context?: {
     caller_functionname?: string

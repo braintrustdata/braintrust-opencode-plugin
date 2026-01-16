@@ -11,6 +11,7 @@ import type {
   EventMessageUpdated,
   EventSessionCreated,
   EventSessionDeleted,
+  EventSessionError,
   EventSessionIdle,
   Session,
   TextPart,
@@ -34,7 +35,12 @@ export interface TestSession {
  */
 export type TestItem =
   | Event
-  | { _hook: "chat.message"; userMessage: string; model?: { providerID: string; modelID: string } }
+  | {
+      _hook: "chat.message"
+      userMessage: string
+      model?: { providerID: string; modelID: string }
+      sessionID?: string // Optional: target session for subagent scenarios
+    }
   | {
       _hook: "tool.execute"
       callID: string
@@ -108,13 +114,65 @@ export function sessionDeleted(sessionID: string): EventSessionDeleted {
 }
 
 /**
+ * Create a session.error event
+ */
+export function sessionError(
+  sessionID: string,
+  errorName: string,
+  errorMessage?: string,
+): EventSessionError {
+  return {
+    type: "session.error",
+    properties: {
+      sessionID,
+      error: {
+        name: errorName,
+        data: { message: errorMessage || errorName },
+      } as EventSessionError["properties"]["error"],
+    },
+  }
+}
+
+/**
+ * Create a session.created event for a child session (subagent)
+ */
+export function childSessionCreated(
+  childSessionID: string,
+  parentSessionID: string,
+  title?: string,
+): EventSessionCreated {
+  const sessionInfo: Session & { parentID?: string } = {
+    id: childSessionID,
+    parentID: parentSessionID,
+    projectID: "test-project",
+    directory: "/test",
+    version: "1.0.0",
+    title: title || `Task (@explore subagent)`,
+    time: { created: Date.now(), updated: Date.now() },
+  }
+  return {
+    type: "session.created",
+    properties: { info: sessionInfo },
+  }
+}
+
+/**
  * User sends a chat message (hook call, not an event)
+ * @param userMessage - The user's message
+ * @param options - Optional model and sessionID (for subagent scenarios)
  */
 export function chatMessage(
   userMessage: string,
-  model?: { providerID: string; modelID: string },
+  options?: { providerID: string; modelID: string } | { sessionID: string },
 ): TestItem {
-  return { _hook: "chat.message", userMessage, model }
+  if (options && "sessionID" in options) {
+    return { _hook: "chat.message", userMessage, sessionID: options.sessionID }
+  }
+  return {
+    _hook: "chat.message",
+    userMessage,
+    model: options as { providerID: string; modelID: string } | undefined,
+  }
 }
 
 /**
@@ -242,6 +300,7 @@ export interface ExpectedSpan {
   }
   input?: unknown
   output?: unknown
+  error?: string | RegExp
   metrics?: {
     start?: number
     end?: number
@@ -258,7 +317,12 @@ export interface ExpectedSpan {
 // ============================================================================
 
 type HookItem =
-  | { _hook: "chat.message"; userMessage: string; model?: { providerID: string; modelID: string } }
+  | {
+      _hook: "chat.message"
+      userMessage: string
+      model?: { providerID: string; modelID: string }
+      sessionID?: string
+    }
   | {
       _hook: "tool.execute"
       callID: string
@@ -291,9 +355,12 @@ export async function eventsToTree(
           _hook: "chat.message"
           userMessage: string
           model?: { providerID: string; modelID: string }
+          sessionID?: string
         }
+        // Use hook's sessionID if specified (for subagent scenarios), otherwise default to main session
+        const targetSessionID = hook.sessionID || sessionID
         await processor.processChatMessage(
-          sessionID,
+          targetSessionID,
           hook.userMessage,
           hook.model || { providerID: "anthropic", modelID: "claude-3-haiku" },
         )
@@ -370,6 +437,10 @@ function spanMatchesSingle(actual: SpanTree, expected: ExpectedSpan): boolean {
     if (JSON.stringify(actual.output) !== JSON.stringify(expected.output)) return false
   }
 
+  if (expected.error !== undefined) {
+    if (!nameMatches(actual.error, expected.error)) return false
+  }
+
   return true
 }
 
@@ -437,6 +508,10 @@ export function getDiff(actual: SpanTree | null, expected: ExpectedSpan, path = 
         `${path}.metrics.completion_tokens: expected ${expected.metrics.completion_tokens}, got ${actual.metrics?.completion_tokens}`,
       )
     }
+  }
+
+  if (expected.error !== undefined && !nameMatches(actual.error, expected.error)) {
+    diffs.push(`${path}.error: expected "${expected.error}", got "${actual.error}"`)
   }
 
   if (expected.children !== undefined) {

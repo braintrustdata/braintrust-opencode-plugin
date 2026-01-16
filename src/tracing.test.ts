@@ -8,9 +8,11 @@ import { describe, it } from "bun:test"
 import {
   assertEventsProduceTree,
   chatMessage,
+  childSessionCreated,
   messageCompleted,
   session,
   sessionCreated,
+  sessionError,
   sessionIdle,
   textPart,
   toolCallPart,
@@ -213,6 +215,167 @@ describe("Event to Span Transformation", () => {
               },
               {
                 span_attributes: { name: "edit: config.ts", type: "tool" },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+})
+
+describe("Session Errors", () => {
+  it("session error during turn closes spans with error", async () => {
+    const sessionId = "ses_error"
+    const messageId = "msg_1"
+
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Do something"),
+        textPart(sessionId, messageId, "Working on it..."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        // Error occurs during session
+        sessionError(sessionId, "ApiError", "Rate limit exceeded"),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        error: /Rate limit exceeded[\s\S]*type: ApiError/,
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            error: /Rate limit exceeded[\s\S]*type: ApiError/,
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
+  it("session error before any turn still closes root span with error", async () => {
+    const sessionId = "ses_error_early"
+
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        // Error occurs immediately, before any chat message
+        sessionError(sessionId, "AuthError", "Invalid API key"),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        error: /Invalid API key[\s\S]*type: AuthError/,
+        children: [],
+      },
+    )
+  })
+})
+
+describe("Subagents (Child Sessions)", () => {
+  it("subagent creates child span linked to parent trace", async () => {
+    const parentSessionId = "ses_parent"
+    const childSessionId = "ses_child"
+
+    await assertEventsProduceTree(
+      session(
+        parentSessionId,
+        // Parent session starts
+        sessionCreated(parentSessionId),
+        chatMessage("Search the codebase"),
+        // Parent LLM response triggers subagent
+        textPart(parentSessionId, "msg_1", "Let me search for that..."),
+        messageCompleted(parentSessionId, "msg_1", { tokens: { input: 10, output: 5 } }),
+        // Child session (subagent) created
+        childSessionCreated(childSessionId, parentSessionId, "Find files (@explore subagent)"),
+        // Child does some work (note: sessionID specified to target child session)
+        chatMessage("Searching...", { sessionID: childSessionId }),
+        textPart(childSessionId, "msg_child_1", "Found 3 files"),
+        messageCompleted(childSessionId, "msg_child_1", { tokens: { input: 8, output: 4 } }),
+        // Child session completes
+        sessionIdle(childSessionId),
+        // Parent continues
+        sessionIdle(parentSessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+              },
+              // Subagent appears as child of the turn
+              {
+                span_attributes: { name: "explore: Find files", type: "task" },
+                children: [
+                  {
+                    span_attributes: { name: "Turn 1", type: "task" },
+                    children: [
+                      {
+                        span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
+  it("subagent with default title format", async () => {
+    const parentSessionId = "ses_parent2"
+    const childSessionId = "ses_child2"
+
+    await assertEventsProduceTree(
+      session(
+        parentSessionId,
+        sessionCreated(parentSessionId),
+        chatMessage("Do a task"),
+        textPart(parentSessionId, "msg_1", "Starting task..."),
+        messageCompleted(parentSessionId, "msg_1", { tokens: { input: 5, output: 3 } }),
+        // Child with custom title format
+        childSessionCreated(
+          childSessionId,
+          parentSessionId,
+          "Research the topic (@general subagent)",
+        ),
+        chatMessage("Researching...", { sessionID: childSessionId }),
+        textPart(childSessionId, "msg_c1", "Done"),
+        messageCompleted(childSessionId, "msg_c1", { tokens: { input: 4, output: 2 } }),
+        sessionIdle(childSessionId),
+        sessionIdle(parentSessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+              },
+              {
+                // Title parsed from "Research the topic (@general subagent)" -> "general: Research the topic"
+                span_attributes: { name: "general: Research the topic", type: "task" },
+                children: [
+                  {
+                    span_attributes: { name: "Turn 1", type: "task" },
+                    children: [
+                      {
+                        span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                      },
+                    ],
+                  },
+                ],
               },
             ],
           },

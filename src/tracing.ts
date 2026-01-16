@@ -19,6 +19,7 @@ function generateUUID(): string {
 // State management for tracing
 interface SessionState {
   rootSpanId: string
+  effectiveRootSpanId: string // For child sessions, this is the parent's root span ID; otherwise same as rootSpanId
   currentTurnSpanId?: string
   turnNumber: number
   toolCallCount: number
@@ -27,6 +28,11 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  // Parent-child session tracking (for subagents)
+  parentSessionId?: string // If this is a child session, the parent's session ID
+  parentRootSpanId?: string // The parent's root span ID (child spans link to this as root)
+  parentTurnSpanId?: string // The parent's turn span ID (child's root span is a child of this)
+  subagentTitle?: string // Title for subagent spans (e.g., "{subagent_type}: {description}")
   // LLM span tracking
   currentAssistantMessageId?: string
   llmOutputParts: Map<string, string> // messageId -> accumulated text
@@ -34,9 +40,11 @@ interface SessionState {
     string,
     Array<{ id: string; type: string; function: { name: string; arguments: string } }>
   > // messageId -> tool_calls
+  llmReasoningParts: Map<string, string> // messageId -> reasoning/thinking text
   processedLlmMessages: Set<string> // track which assistant messages we've created spans for
   // Tool span tracking
   toolStartTimes: Map<string, number> // callID -> start timestamp
+  toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
 }
 
 const sessionStates = new Map<string, SessionState>()
@@ -102,6 +110,94 @@ export function createTracingHooks(
           (props.sessionID as string) || (info?.id as string) || (props.id as string)
 
         if (event.type === "session.created") {
+          // Check for child session (subagent) creation
+          const sessionInfo = info as Record<string, unknown> | undefined
+          const childSessionID = sessionInfo?.id as string
+          const parentSessionID = sessionInfo?.parentID as string
+
+          // Handle child session (subagent) - link to parent trace
+          if (childSessionID && parentSessionID) {
+            const parentState = sessionStates.get(parentSessionID)
+            if (parentState) {
+              // Extract subagent title from session title
+              // OpenCode format: "{description} (@{agent.name} subagent)"
+              // We want: "{agent.name}: {description}"
+              const sessionTitle = sessionInfo?.title as string | undefined
+              let subagentTitle = sessionTitle || "Subagent"
+              if (sessionTitle) {
+                const match = sessionTitle.match(/^(.+?)\s+\(@(\w+)\s+subagent\)$/)
+                if (match) {
+                  const [, description, agentType] = match
+                  subagentTitle = `${agentType}: ${description}`
+                }
+              }
+
+              log("Child session created, linking to parent", {
+                childSessionID,
+                parentSessionID,
+                parentRootSpanId: parentState.rootSpanId,
+                parentTurnSpanId: parentState.currentTurnSpanId,
+                subagentTitle,
+              })
+
+              // Create child session state with parent linking info
+              const childState: SessionState = {
+                rootSpanId: "", // Will be set when we create the root span
+                effectiveRootSpanId: parentState.effectiveRootSpanId, // Use parent's effective root for trace linking
+                turnNumber: 0,
+                toolCallCount: 0,
+                startTime: Date.now(),
+                parentSessionId: parentSessionID,
+                parentRootSpanId: parentState.effectiveRootSpanId,
+                parentTurnSpanId: parentState.currentTurnSpanId,
+                subagentTitle,
+                llmOutputParts: new Map(),
+                llmToolCalls: new Map(),
+                llmReasoningParts: new Map(),
+                processedLlmMessages: new Set(),
+                toolStartTimes: new Map(),
+                toolCallMessageIds: new Map(),
+              }
+              sessionStates.set(childSessionID, childState)
+
+              // Create root span for child session, linked to parent's trace
+              const rootSpanId = generateUUID()
+              childState.rootSpanId = rootSpanId
+
+              const root_span: SpanData = {
+                id: rootSpanId,
+                span_id: rootSpanId,
+                root_span_id: parentState.effectiveRootSpanId, // Link to parent's trace
+                span_parents: parentState.currentTurnSpanId
+                  ? [parentState.currentTurnSpanId]
+                  : undefined, // Child of parent's turn
+                created: new Date(childState.startTime).toISOString(),
+                metadata: {
+                  session_id: childSessionID,
+                  parent_session_id: parentSessionID,
+                  is_subagent: true,
+                },
+                metrics: {
+                  start: childState.startTime,
+                },
+                span_attributes: {
+                  name: subagentTitle,
+                  type: "task",
+                },
+              }
+
+              const rowId = await btClient.insertSpan(root_span, log)
+              log("Created child session root span", {
+                rootSpanId,
+                rowId,
+                success: !!rowId,
+                parentRootSpanId: parentState.effectiveRootSpanId,
+              })
+              return
+            }
+          }
+
+          // Handle regular (parent) session creation
           log("Session created event", {
             sessionID,
             hasSessionID: !!sessionID,
@@ -119,13 +215,16 @@ export function createTracingHooks(
           const rootSpanId = generateUUID()
           const state: SessionState = {
             rootSpanId,
+            effectiveRootSpanId: rootSpanId, // For root sessions, effective root is self
             turnNumber: 0,
             toolCallCount: 0,
             startTime: Date.now(),
             llmOutputParts: new Map(),
             llmToolCalls: new Map(),
+            llmReasoningParts: new Map(),
             processedLlmMessages: new Set(),
             toolStartTimes: new Map(),
+            toolCallMessageIds: new Map(),
           }
           sessionStates.set(sessionKey, state)
 
@@ -229,7 +328,18 @@ export function createTracingHooks(
                 toolCalls.push(toolCall)
               }
 
+              // Store messageId for this callID so we can look up reasoning later
+              state.toolCallMessageIds.set(callID, messageId)
+
               log("Tracking LLM tool call", { messageId, callID, tool })
+            }
+          }
+          // Track reasoning/thinking content for LLM spans
+          else if (part.type === "reasoning" && messageId) {
+            const text = part.text as string
+            if (text) {
+              state.llmReasoningParts.set(messageId, text)
+              log("Tracking LLM reasoning part", { messageId, textLength: text.length })
             }
           }
         }
@@ -306,17 +416,21 @@ export function createTracingHooks(
             llmErrorString = `${errorMessage}\n\ntype: ${errorName}`
           }
 
-          // Get output text and tool calls from tracked parts
+          // Get output text, tool calls, and reasoning from tracked parts
           const outputText = state.llmOutputParts.get(messageId) || ""
           const toolCalls = state.llmToolCalls.get(messageId)
+          const reasoningText = state.llmReasoningParts.get(messageId)
 
-          // Build assistant message object - include tool_calls if present
+          // Build assistant message object - include tool_calls and reasoning if present
           const assistantMessage: Record<string, unknown> = {
             role: "assistant",
             content: outputText,
           }
           if (toolCalls && toolCalls.length > 0) {
             assistantMessage.tool_calls = toolCalls
+          }
+          if (reasoningText) {
+            assistantMessage.reasoning = { content: reasoningText }
           }
 
           // Build input as messages array (all messages except the last)
@@ -333,7 +447,7 @@ export function createTracingHooks(
           const llmSpan: SpanData = {
             id: llmSpanId,
             span_id: llmSpanId,
-            root_span_id: state.rootSpanId,
+            root_span_id: state.effectiveRootSpanId,
             span_parents: [state.currentTurnSpanId],
             created: new Date(time.created as number).toISOString(),
             input: llmInput.length > 0 ? llmInput : undefined,
@@ -345,6 +459,7 @@ export function createTracingHooks(
               prompt_tokens: inputTokens,
               completion_tokens: outputTokens,
               tokens: totalTokens,
+              reasoning_tokens: reasoningTokens || undefined,
             },
             metadata: {
               model: modelName,
@@ -362,9 +477,11 @@ export function createTracingHooks(
             messageId,
             modelName,
             tokens: totalTokens,
+            reasoningTokens,
             rowId,
             turnSpanId: state.currentTurnSpanId,
             outputLength: outputText.length,
+            reasoningLength: reasoningText?.length || 0,
             toolCallsCount: toolCalls?.length || 0,
             hasError: !!llmErrorString,
           })
@@ -379,32 +496,65 @@ export function createTracingHooks(
           const sessionKey = String(sessionID)
           const state = sessionStates.get(sessionKey)
 
-          if (state?.currentTurnSpanId) {
-            log("Closing turn span on idle", {
-              sessionKey,
-              turnNumber: state.turnNumber,
-              input: state.currentInput?.substring(0, 100),
-              output: state.currentOutput?.substring(0, 100),
-            })
-
+          if (state) {
             const now = Date.now()
-            // Close current turn span using merge (only send fields to update)
-            const turnSpan: SpanData = {
-              id: state.currentTurnSpanId,
-              span_id: state.currentTurnSpanId,
-              root_span_id: state.rootSpanId,
-              output: state.currentOutput || undefined,
-              metrics: {
-                end: now,
-              },
-              _is_merge: true,
+            const isChildSession = !!state.parentSessionId
+
+            // Close current turn span if exists
+            if (state.currentTurnSpanId) {
+              log("Closing turn span on idle", {
+                sessionKey,
+                turnNumber: state.turnNumber,
+                input: state.currentInput?.substring(0, 100),
+                output: state.currentOutput?.substring(0, 100),
+                isChildSession,
+              })
+
+              const turnSpan: SpanData = {
+                id: state.currentTurnSpanId,
+                span_id: state.currentTurnSpanId,
+                root_span_id: state.effectiveRootSpanId,
+                output: state.currentOutput || undefined,
+                metrics: {
+                  end: now,
+                },
+                _is_merge: true,
+              }
+              await btClient.insertSpan(turnSpan, log)
+              state.currentTurnSpanId = undefined
+              state.currentInput = undefined
+              state.currentOutput = undefined
+              state.currentTurnStartTime = undefined
+              log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
             }
-            await btClient.insertSpan(turnSpan, log)
-            state.currentTurnSpanId = undefined
-            state.currentInput = undefined
-            state.currentOutput = undefined
-            state.currentTurnStartTime = undefined
-            log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
+
+            // For child sessions (subagents), also close the root span since they don't get session.deleted
+            if (isChildSession && state.rootSpanId) {
+              log("Closing child session root span on idle", {
+                sessionKey,
+                parentSessionId: state.parentSessionId,
+                rootSpanId: state.rootSpanId,
+              })
+
+              const rootSpan: SpanData = {
+                id: state.rootSpanId,
+                span_id: state.rootSpanId,
+                root_span_id: state.effectiveRootSpanId,
+                metrics: {
+                  end: now,
+                },
+                metadata: {
+                  total_turns: state.turnNumber,
+                  total_tool_calls: state.toolCallCount,
+                },
+                _is_merge: true,
+              }
+              await btClient.insertSpan(rootSpan, log)
+
+              // Clean up child session state
+              sessionStates.delete(sessionKey)
+              log("Child session closed", { sessionKey })
+            }
           }
         }
         // Fully close session on deleted
@@ -420,13 +570,14 @@ export function createTracingHooks(
           if (state) {
             log("Closing session span on delete", { sessionKey })
 
+            const now = Date.now()
+
             // Close current turn span if exists using merge
             if (state.currentTurnSpanId) {
-              const now = Date.now()
               const turnSpan: SpanData = {
                 id: state.currentTurnSpanId,
                 span_id: state.currentTurnSpanId,
-                root_span_id: state.rootSpanId,
+                root_span_id: state.effectiveRootSpanId,
                 output: state.currentOutput || undefined,
                 metrics: {
                   end: now,
@@ -440,9 +591,9 @@ export function createTracingHooks(
             const span: SpanData = {
               id: state.rootSpanId,
               span_id: state.rootSpanId,
-              root_span_id: state.rootSpanId,
+              root_span_id: state.effectiveRootSpanId,
               metrics: {
-                end: Date.now(),
+                end: now,
               },
               metadata: {
                 total_turns: state.turnNumber,
@@ -454,7 +605,9 @@ export function createTracingHooks(
             sessionStates.delete(sessionKey)
             log("Session span closed", { sessionKey })
           }
-        } else if (event.type === "session.error") {
+        }
+        // Handle session error - close spans with error info
+        else if (event.type === "session.error") {
           const errorSessionID = props.sessionID as string
           if (!errorSessionID) {
             log("session.error but no session ID found")
@@ -485,7 +638,7 @@ export function createTracingHooks(
               const turnSpan: SpanData = {
                 id: state.currentTurnSpanId,
                 span_id: state.currentTurnSpanId,
-                root_span_id: state.rootSpanId,
+                root_span_id: state.effectiveRootSpanId,
                 output: state.currentOutput || undefined,
                 error: errorString,
                 metrics: { end: now },
@@ -498,7 +651,7 @@ export function createTracingHooks(
             const rootSpan: SpanData = {
               id: state.rootSpanId,
               span_id: state.rootSpanId,
-              root_span_id: state.rootSpanId,
+              root_span_id: state.effectiveRootSpanId,
               error: errorString,
               metrics: { end: now },
               metadata: {
@@ -546,7 +699,7 @@ export function createTracingHooks(
         const prevTurnSpan: SpanData = {
           id: state.currentTurnSpanId,
           span_id: state.currentTurnSpanId,
-          root_span_id: state.rootSpanId,
+          root_span_id: state.effectiveRootSpanId,
           output: state.currentOutput || undefined,
           metrics: {
             end: Date.now(),
@@ -580,7 +733,7 @@ export function createTracingHooks(
       const turnSpan: SpanData = {
         id: state.currentTurnSpanId, // Use span_id as id so merges work
         span_id: state.currentTurnSpanId,
-        root_span_id: state.rootSpanId,
+        root_span_id: state.effectiveRootSpanId,
         span_parents: [state.rootSpanId],
         created: new Date(now).toISOString(),
         input: userMessage || undefined, // Send undefined if empty, not empty string
@@ -639,13 +792,18 @@ export function createTracingHooks(
       const startTime = state.toolStartTimes.get(callID)
       state.toolStartTimes.delete(callID)
 
+      // Look up reasoning for this tool call via messageId
+      const messageId = state.toolCallMessageIds.get(callID)
+      const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
+      state.toolCallMessageIds.delete(callID)
+
       // Create tool span
       const toolSpanId = generateUUID()
       const endTime = Date.now()
       const toolSpan: SpanData = {
         id: generateUUID(),
         span_id: toolSpanId,
-        root_span_id: state.rootSpanId,
+        root_span_id: state.effectiveRootSpanId,
         span_parents: [state.currentTurnSpanId],
         input: result.metadata,
         output: result.output.substring(0, 10000), // Truncate large outputs
@@ -653,6 +811,7 @@ export function createTracingHooks(
           tool_name: tool,
           call_id: callID,
           title: result.title,
+          reasoning: reasoning || undefined,
         },
         metrics: {
           start: startTime,
@@ -665,7 +824,14 @@ export function createTracingHooks(
       }
 
       await btClient.insertSpan(toolSpan, log)
-      log("Created tool span", { tool, callID, startTime, endTime })
+      log("Created tool span", {
+        tool,
+        callID,
+        startTime,
+        endTime,
+        hasReasoning: !!reasoning,
+        reasoningLength: reasoning?.length || 0,
+      })
     },
   }
 }

@@ -58,6 +58,7 @@ export interface SpanTree {
   type?: "task" | "llm" | "tool" | "function" | "eval" | "score"
   input?: unknown
   output?: unknown
+  error?: string
   metrics?: {
     start?: number
     end?: number
@@ -116,6 +117,7 @@ export function spansToTree(spans: SpanData[]): SpanTree | null {
       type: span.span_attributes?.type,
       input: span.input,
       output: span.output,
+      error: span.error,
       metrics: span.metrics,
       metadata: span.metadata as Record<string, unknown>,
       children: sortedChildren.map(buildNode),
