@@ -7,6 +7,8 @@
 
 import type { Event } from "@opencode-ai/sdk"
 import type { SpanData } from "./client"
+import type { Clock } from "./clock"
+import { wallClock } from "./clock"
 import type { SpanSink } from "./span-sink"
 
 // Generate a UUID
@@ -59,15 +61,20 @@ export class EventProcessor {
   private spanSink: SpanSink
   private config: EventProcessorConfig
   private log: (msg: string, data?: unknown) => void
+  private clock: Clock
 
   constructor(
     spanSink: SpanSink,
     config: EventProcessorConfig,
-    log?: (msg: string, data?: unknown) => void,
+    options?: {
+      log?: (msg: string, data?: unknown) => void
+      clock?: Clock
+    },
   ) {
     this.spanSink = spanSink
     this.config = config
-    this.log = log || (() => {})
+    this.log = options?.log || (() => {})
+    this.clock = options?.clock || wallClock
   }
 
   /**
@@ -115,7 +122,7 @@ export class EventProcessor {
         root_span_id: state.effectiveRootSpanId,
         output: state.currentOutput || undefined,
         metrics: {
-          end: Date.now(),
+          end: this.clock.now(),
         },
         _is_merge: true,
       }
@@ -128,7 +135,7 @@ export class EventProcessor {
     state.currentOutput = undefined
     state.currentInput = userMessage
 
-    const now = Date.now()
+    const now = this.clock.now()
     state.currentTurnStartTime = now
 
     const turnSpan: SpanData = {
@@ -161,7 +168,7 @@ export class EventProcessor {
   async processToolExecuteBefore(sessionID: string, callID: string): Promise<void> {
     const state = this.sessionStates.get(sessionID)
     if (state) {
-      state.toolStartTimes.set(callID, Date.now())
+      state.toolStartTimes.set(callID, this.clock.now())
     }
   }
 
@@ -193,7 +200,7 @@ export class EventProcessor {
     state.toolCallMessageIds.delete(callID)
 
     const toolSpanId = generateUUID()
-    const endTime = Date.now()
+    const endTime = this.clock.now()
     const toolSpan: SpanData = {
       id: generateUUID(),
       span_id: toolSpanId,
@@ -259,7 +266,7 @@ export class EventProcessor {
           effectiveRootSpanId: parentState.effectiveRootSpanId, // Use parent's effective root for trace linking
           turnNumber: 0,
           toolCallCount: 0,
-          startTime: Date.now(),
+          startTime: this.clock.now(),
           parentSessionId: parentSessionID,
           parentRootSpanId: parentState.effectiveRootSpanId,
           parentTurnSpanId: parentState.currentTurnSpanId,
@@ -313,7 +320,7 @@ export class EventProcessor {
       effectiveRootSpanId: rootSpanId, // For root sessions, effective root is self
       turnNumber: 0,
       toolCallCount: 0,
-      startTime: Date.now(),
+      startTime: this.clock.now(),
       llmOutputParts: new Map(),
       llmToolCalls: new Map(),
       llmReasoningParts: new Map(),
@@ -551,7 +558,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = Date.now()
+      const now = this.clock.now()
       const isChildSession = !!state.parentSessionId
 
       // Close current turn span if exists
@@ -614,7 +621,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = Date.now()
+      const now = this.clock.now()
 
       // Close current turn span if exists
       if (state.currentTurnSpanId) {
@@ -662,7 +669,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = Date.now()
+      const now = this.clock.now()
 
       // Extract error info from event.properties
       // Error structure: { name: "ErrorType", data: { message?: string, ... } }

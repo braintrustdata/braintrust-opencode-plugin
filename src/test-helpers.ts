@@ -19,6 +19,7 @@ import type {
   ToolPart,
   ToolStateRunning,
 } from "@opencode-ai/sdk"
+import { TestClock } from "./clock"
 import { EventProcessor } from "./event-processor"
 import { type SpanTree, spansToTree, TestSpanCollector } from "./span-sink"
 
@@ -366,12 +367,16 @@ export async function eventsToTree(
   testSession: TestSession,
   projectName = "test-project",
 ): Promise<SpanTree | null> {
+  const clock = new TestClock()
   const collector = new TestSpanCollector()
-  const processor = new EventProcessor(collector, { projectName })
+  const processor = new EventProcessor(collector, { projectName }, { clock })
 
   const { sessionID } = testSession
 
   for (const item of testSession.items) {
+    // Advance the clock for each item to ensure unique, ordered timestamps
+    clock.tick()
+
     if (isHook(item)) {
       if (item._hook === "chat.message") {
         const hook = item as {
@@ -397,6 +402,7 @@ export async function eventsToTree(
           output: string
         }
         await processor.processToolExecuteBefore(sessionID, hook.callID)
+        clock.tick() // Advance time between before and after
         await processor.processToolExecuteAfter(
           sessionID,
           hook.callID,
@@ -407,12 +413,44 @@ export async function eventsToTree(
         )
       }
     } else {
-      // It's a real Event
-      await processor.processEvent(item)
+      // It's a real Event - patch timestamps to use clock time for deterministic ordering
+      const event = patchEventTimestamps(item, clock)
+      await processor.processEvent(event)
     }
   }
 
   return spansToTree(collector.getSpans())
+}
+
+/**
+ * Patch event timestamps to use clock time for deterministic test ordering
+ */
+function patchEventTimestamps(event: Event, clock: TestClock): Event {
+  if (event.type === "message.updated") {
+    const props = event.properties as Record<string, unknown>
+    const info = props.info as Record<string, unknown> | undefined
+    if (info?.time) {
+      const time = info.time as Record<string, unknown>
+      // Use clock time for start/end to ensure proper ordering with tool spans
+      const startTime = clock.now()
+      clock.tick()
+      const endTime = clock.now()
+      // Create patched event with clock timestamps
+      const patchedInfo = {
+        ...info,
+        time: {
+          ...time,
+          created: startTime,
+          completed: endTime,
+        },
+      }
+      return {
+        type: event.type,
+        properties: { info: patchedInfo },
+      } as Event
+    }
+  }
+  return event
 }
 
 /**

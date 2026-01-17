@@ -18,9 +18,9 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
   // Precedence: global config -> project config (project overrides global)
   let pluginConfig: PluginConfig | undefined
   try {
-    const fs = await import("fs")
-    const path = await import("path")
-    const os = await import("os")
+    const fs = await import("node:fs")
+    const path = await import("node:path")
+    const os = await import("node:os")
 
     // Load configs in order: global first, then project (so project overrides global)
     const configPaths = [

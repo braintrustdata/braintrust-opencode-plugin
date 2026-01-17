@@ -10,6 +10,7 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { BraintrustClient, BraintrustConfig, SpanData } from "./client"
+import { wallClock } from "./clock"
 
 // Generate a UUID
 function generateUUID(): string {
@@ -146,7 +147,7 @@ export function createTracingHooks(
                 effectiveRootSpanId: parentState.effectiveRootSpanId, // Use parent's effective root for trace linking
                 turnNumber: 0,
                 toolCallCount: 0,
-                startTime: Date.now(),
+                startTime: wallClock.now(),
                 parentSessionId: parentSessionID,
                 parentRootSpanId: parentState.effectiveRootSpanId,
                 parentTurnSpanId: parentState.currentTurnSpanId,
@@ -218,7 +219,7 @@ export function createTracingHooks(
             effectiveRootSpanId: rootSpanId, // For root sessions, effective root is self
             turnNumber: 0,
             toolCallCount: 0,
-            startTime: Date.now(),
+            startTime: wallClock.now(),
             llmOutputParts: new Map(),
             llmToolCalls: new Map(),
             llmReasoningParts: new Map(),
@@ -498,7 +499,7 @@ export function createTracingHooks(
           const state = sessionStates.get(sessionKey)
 
           if (state) {
-            const now = Date.now()
+            const now = wallClock.now()
             const isChildSession = !!state.parentSessionId
 
             // Close current turn span if exists
@@ -571,7 +572,7 @@ export function createTracingHooks(
           if (state) {
             log("Closing session span on delete", { sessionKey })
 
-            const now = Date.now()
+            const now = wallClock.now()
 
             // Close current turn span if exists using merge
             if (state.currentTurnSpanId) {
@@ -619,7 +620,7 @@ export function createTracingHooks(
           const state = sessionStates.get(sessionKey)
 
           if (state) {
-            const now = Date.now()
+            const now = wallClock.now()
 
             // Extract error info from event.properties
             // Error structure: { name: "ErrorType", data: { message?: string, ... } }
@@ -703,7 +704,7 @@ export function createTracingHooks(
           root_span_id: state.effectiveRootSpanId,
           output: state.currentOutput || undefined,
           metrics: {
-            end: Date.now(),
+            end: wallClock.now(),
           },
           _is_merge: true,
         }
@@ -723,7 +724,7 @@ export function createTracingHooks(
           .join("\n") || ""
 
       state.currentInput = userMessage
-      const now = Date.now()
+      const now = wallClock.now()
       state.currentTurnStartTime = now
       log("User message extracted", {
         userMessage,
@@ -773,7 +774,7 @@ export function createTracingHooks(
       // Store start time for this tool call
       const state = sessionStates.get(sessionID)
       if (state) {
-        state.toolStartTimes.set(callID, Date.now())
+        state.toolStartTimes.set(callID, wallClock.now())
       }
     },
 
@@ -800,7 +801,7 @@ export function createTracingHooks(
 
       // Create tool span
       const toolSpanId = generateUUID()
-      const endTime = Date.now()
+      const endTime = wallClock.now()
       const toolSpan: SpanData = {
         id: generateUUID(),
         span_id: toolSpanId,
