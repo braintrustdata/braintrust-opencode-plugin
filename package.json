@@ -1,6 +1,6 @@
 {
-  "name": "opencode-braintrust",
-  "version": "0.1.0",
+  "name": "@braintrust/opencode-plugin",
+  "version": "0.0.1",
   "description": "Braintrust integration for OpenCode - tracing, evaluation, and data access",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,7 +32,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/braintrustdata/opencode-braintrust"
+    "url": "https://github.com/braintrustdata/braintrust-opencode-plugin"
   },
   "files": [
     "dist",

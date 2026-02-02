@@ -1,4 +1,4 @@
-# Contributing to opencode-braintrust
+# Contributing to @braintrust/opencode-plugin
 
 Thank you for your interest in contributing! This document provides guidelines for developing and testing the plugin.
 
@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/braintrustdata/opencode-braintrust
-   cd opencode-braintrust
+   git clone https://github.com/braintrustdata/braintrust-opencode-plugin
+   cd braintrust-opencode-plugin
    ```
 
 2. **Install dependencies**
@@ -181,11 +181,33 @@ In an OpenCode session, try:
 
 ## Release Process
 
-1. Update version in `package.json`
-2. Update CHANGELOG.md
-3. Create a git tag
-4. Push to GitHub
-5. Publish to npm: `npm publish`
+1. **Update version** in `package.json`
+2. **Update CHANGELOG.md** - Move items from `[Unreleased]` to a new version section
+3. **Commit the version bump**
+   ```bash
+   git add package.json CHANGELOG.md
+   git commit -m "chore: release v0.x.x"
+   ```
+4. **Create a git tag**
+   ```bash
+   git tag v0.x.x
+   ```
+5. **Push to GitHub**
+   ```bash
+   git push origin main --tags
+   ```
+6. **Login to npm** (if not already logged in)
+   ```bash
+   npm login
+   ```
+7. **Publish to npm**
+   ```bash
+   npm publish --access public
+   ```
+
+> **Note:** You must be a member of the `@braintrust` npm organization to publish. Contact an org admin to get access at https://www.npmjs.com/settings/braintrust/members
+
+> **Note:** The `prepublishOnly` script automatically runs `bun run build` before publishing. Scoped packages require `--access public` to be publicly visible.
 
 ## Getting Help
 

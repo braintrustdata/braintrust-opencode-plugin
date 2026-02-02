@@ -1,4 +1,4 @@
-# opencode-braintrust
+# @braintrust/opencode-plugin
 
 Braintrust integration plugin for [OpenCode](https://opencode.ai). Provides automatic session tracing and data access tools for your Braintrust workspace.
 
@@ -23,55 +23,27 @@ Custom tools available to the AI assistant:
 
 ## Quick Start
 
-```bash
-# 1. Clone and install
-git clone https://github.com/braintrustdata/opencode-braintrust
-cd opencode-braintrust
-./install.sh # NOTE: requires bun to build the plugin. https://bun.sh/
-
-# 2. Set your API key
-export BRAINTRUST_API_KEY="your-api-key"
-export TRACE_TO_BRAINTRUST="true"
-
-# 3. Run OpenCode
-opencode
-
-# 4. View traces at:
-# https://www.braintrust.dev/app/projects/opencode/logs
-```
-
-## Installation
-
-### Option 1: Quick Install (Recommended)
-
-```bash
-git clone https://github.com/braintrustdata/opencode-braintrust
-cd opencode-braintrust
-./install.sh
-```
-
-### Option 2: Install from npm (when published)
-
 Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/opencode.json`):
 
 ```json
 {
-  "plugin": ["opencode-braintrust"]
+  "plugin": ["@braintrust/opencode-plugin"]
 }
 ```
 
-### Option 3: Manual Installation
+Then,
 
-1. Clone this repository
-2. Build the plugin:
-   ```bash
-   bun install
-   bun run build
-   ```
-3. Copy to your plugin directory:
-   ```bash
-   cp dist/index.js ~/.config/opencode/plugin/braintrust.js
-   ```
+```bash
+# Set your API key
+export BRAINTRUST_API_KEY="your-api-key"
+export TRACE_TO_BRAINTRUST="true"
+
+# Run OpenCode
+opencode
+
+# View traces at:
+# https://www.braintrust.dev/app/projects/opencode/logs
+```
 
 ## Configuration
 
@@ -188,7 +160,7 @@ If you see an error like `Cannot call a class constructor without |new|`:
 
 1. Make sure you're using the latest build:
    ```bash
-   cd /path/to/opencode-braintrust
+   cd /path/to/braintrust-opencode-plugin
    bun run build
    cp dist/index.js ~/.config/opencode/plugin/braintrust.js
    ```
