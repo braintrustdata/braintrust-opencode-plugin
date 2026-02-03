@@ -1,4 +1,4 @@
-# Contributing to @braintrust/opencode-plugin
+# Contributing to @braintrust/trace-opencode
 
 Thank you for your interest in contributing! This document provides guidelines for developing and testing the plugin.
 

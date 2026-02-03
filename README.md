@@ -1,4 +1,4 @@
-# @braintrust/opencode-plugin
+# @braintrust/trace-opencode
 
 Braintrust integration plugin for [OpenCode](https://opencode.ai). Provides automatic session tracing and data access tools for your Braintrust workspace.
 
@@ -27,7 +27,7 @@ Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/openc
 
 ```json
 {
-  "plugin": ["@braintrust/opencode-plugin"]
+  "plugin": ["@braintrust/trace-opencode"]
 }
 ```
 
