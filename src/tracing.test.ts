@@ -5,6 +5,9 @@
  */
 
 import { describe, expect, it } from "bun:test"
+import { TestClock } from "./clock"
+import { EventProcessor } from "./event-processor"
+import { spansToTree, TestSpanCollector } from "./span-sink"
 import {
   assertEventsProduceTree,
   chatMessage,
@@ -443,5 +446,169 @@ describe("Reasoning/Thinking Content", () => {
 
     expect(toolSpan?.type).toBe("tool")
     expect(toolSpan?.metadata?.reasoning).toBe("I need to read the config file to understand...")
+  })
+})
+
+describe("Fail-open: missing or non-string tool output", () => {
+  it("tool with undefined output creates span without crashing", async () => {
+    const sessionId = "ses_undef_output"
+    const messageId = "msg_1"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Call a custom MCP tool"),
+        toolCallPart(sessionId, messageId, "call_1", "mcp_tool", { query: "test" }),
+        toolExecute("call_1", "mcp_tool", "mcp_tool", { query: "test" }, undefined),
+        textPart(sessionId, messageId, "Done."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turnSpan = tree?.children[0]
+    const toolSpan = turnSpan?.children.find((c) => c.type === "tool")
+
+    expect(toolSpan).toBeDefined()
+    expect(toolSpan?.type).toBe("tool")
+    expect(toolSpan?.name).toBe("mcp_tool: mcp_tool")
+    expect(toolSpan?.output).toBeUndefined()
+  })
+
+  it("tool with object output (MCP content[]) creates span without crashing", async () => {
+    const sessionId = "ses_obj_output"
+    const messageId = "msg_1"
+
+    const mcpContent = [
+      { type: "text", text: "Here are the results" },
+      { type: "image", data: "base64..." },
+    ]
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Call an MCP tool that returns content[]"),
+        toolCallPart(sessionId, messageId, "call_1", "mcp_search", { q: "foo" }),
+        toolExecute("call_1", "mcp_search", "mcp_search", { q: "foo" }, mcpContent as any),
+        textPart(sessionId, messageId, "Found results."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 12, output: 6 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turnSpan = tree?.children[0]
+    const toolSpan = turnSpan?.children.find((c) => c.type === "tool")
+
+    expect(toolSpan).toBeDefined()
+    expect(toolSpan?.type).toBe("tool")
+    // Object output should be passed through as-is (not truncated with .substring)
+    expect(toolSpan?.output).toEqual(mcpContent)
+  })
+
+  it("tool with very long string output is truncated to 10000 chars", async () => {
+    const sessionId = "ses_long_output"
+    const messageId = "msg_1"
+
+    const longOutput = "x".repeat(20000)
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Call a tool with huge output"),
+        toolCallPart(sessionId, messageId, "call_1", "read", { filePath: "/big.txt" }),
+        toolExecute("call_1", "read", "/big.txt", { filePath: "/big.txt" }, longOutput),
+        textPart(sessionId, messageId, "Read the file."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turnSpan = tree?.children[0]
+    const toolSpan = turnSpan?.children.find((c) => c.type === "tool")
+
+    expect(toolSpan).toBeDefined()
+    expect(typeof toolSpan?.output).toBe("string")
+    expect((toolSpan?.output as string).length).toBe(10000)
+  })
+})
+
+describe("Fail-open: chat.message with missing output", () => {
+  it("chat.message with undefined output does not crash", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test-project" }, { clock })
+
+    // Create session
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_no_output",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    // Call processChatMessageRaw with undefined output — this mirrors the
+    // production hook receiving an output object without parts
+    clock.tick()
+    await processor.processChatMessageRaw("ses_no_output", undefined)
+
+    // Session should still be functional — send idle to close
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_no_output" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    // A turn should have been created with empty input
+    expect(tree?.children.length).toBe(1)
+    expect(tree?.children[0]?.name).toBe("Turn 1")
+    expect(tree?.children[0]?.input).toBeUndefined() // empty string becomes undefined
+  })
+
+  it("chat.message with empty parts array does not crash", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test-project" }, { clock })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_empty_parts",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processChatMessageRaw("ses_empty_parts", { parts: [] })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_empty_parts" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    expect(tree?.children.length).toBe(1)
+    expect(tree?.children[0]?.name).toBe("Turn 1")
   })
 })

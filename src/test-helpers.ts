@@ -49,7 +49,7 @@ export type TestItem =
       tool: string
       title: string
       input: Record<string, unknown>
-      output: string
+      output: string | undefined | unknown
     }
 
 export interface TestToolCall {
@@ -297,7 +297,7 @@ export function toolExecute(
   tool: string,
   title: string,
   input: Record<string, unknown>,
-  output: string,
+  output: string | undefined | unknown,
 ): TestItem {
   return { _hook: "tool.execute", callID, tool, title, input, output }
 }
@@ -353,7 +353,7 @@ type HookItem =
       tool: string
       title: string
       input: Record<string, unknown>
-      output: string
+      output: string | undefined | unknown
     }
 
 function isHook(item: TestItem): item is HookItem {
@@ -399,7 +399,7 @@ export async function eventsToTree(
           tool: string
           title: string
           input: Record<string, unknown>
-          output: string
+          output: string | undefined | unknown
         }
         await processor.processToolExecuteBefore(sessionID, hook.callID)
         clock.tick() // Advance time between before and after
@@ -414,7 +414,7 @@ export async function eventsToTree(
       }
     } else {
       // It's a real Event - patch timestamps to use clock time for deterministic ordering
-      const event = patchEventTimestamps(item, clock)
+      const event = patchEventTimestamps(item as Event, clock)
       await processor.processEvent(event)
     }
   }

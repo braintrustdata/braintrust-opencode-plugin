@@ -163,6 +163,24 @@ export class EventProcessor {
   }
 
   /**
+   * Process a chat.message hook call with raw output (mirrors production hook signature).
+   * Extracts user message from output.parts, handling undefined/missing parts gracefully.
+   */
+  async processChatMessageRaw(
+    sessionID: string,
+    output: { parts?: Array<{ type: string; text?: string }> } | undefined,
+    model?: { providerID?: string; modelID?: string },
+  ): Promise<void> {
+    const userMessage =
+      output?.parts
+        ?.filter((p) => p.type === "text")
+        .map((p) => p.text)
+        .join("\n") || ""
+
+    return this.processChatMessage(sessionID, userMessage, model)
+  }
+
+  /**
    * Process a tool.execute.before hook call
    */
   async processToolExecuteBefore(sessionID: string, callID: string): Promise<void> {
@@ -180,7 +198,7 @@ export class EventProcessor {
     callID: string,
     tool: string,
     title: string,
-    output: string,
+    output: string | undefined | unknown,
     metadata: unknown,
   ): Promise<void> {
     const state = this.sessionStates.get(sessionID)

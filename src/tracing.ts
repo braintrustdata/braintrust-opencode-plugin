@@ -687,153 +687,194 @@ export function createTracingHooks(
 
     // Create turn span when user sends a message
     "chat.message": async (messageInput, output) => {
-      const { sessionID } = messageInput
-      log("Chat message", { sessionID, parts: output.parts })
+      try {
+        const { sessionID } = messageInput
+        log("Chat message", { sessionID, parts: output?.parts })
 
-      const state = sessionStates.get(sessionID)
-      if (!state) {
-        log("No state found for session", { sessionID })
-        return
-      }
+        const state = sessionStates.get(sessionID)
+        if (!state) {
+          log("No state found for session", { sessionID })
+          return
+        }
 
-      // Finalize previous turn if exists (using merge to only update end time)
-      if (state.currentTurnSpanId) {
-        const prevTurnSpan: SpanData = {
-          id: state.currentTurnSpanId,
+        // Finalize previous turn if exists (using merge to only update end time)
+        if (state.currentTurnSpanId) {
+          const prevTurnSpan: SpanData = {
+            id: state.currentTurnSpanId,
+            span_id: state.currentTurnSpanId,
+            root_span_id: state.effectiveRootSpanId,
+            output: state.currentOutput || undefined,
+            metrics: {
+              end: wallClock.now(),
+            },
+            _is_merge: true,
+          }
+          await btClient.insertSpan(prevTurnSpan, log)
+        }
+
+        // Create new turn span
+        state.turnNumber++
+        state.currentTurnSpanId = generateUUID()
+        state.currentOutput = undefined
+
+        // Extract user message from parts
+        const userMessage =
+          output?.parts
+            ?.filter((p: { type: string }) => p.type === "text")
+            .map((p: { type: string; text?: string }) => p.text)
+            .join("\n") || ""
+
+        state.currentInput = userMessage
+        const now = wallClock.now()
+        state.currentTurnStartTime = now
+        log("User message extracted", {
+          userMessage,
+          hasInput: !!userMessage,
+          inputLength: userMessage.length,
+        })
+
+        const turnSpan: SpanData = {
+          id: state.currentTurnSpanId, // Use span_id as id so merges work
           span_id: state.currentTurnSpanId,
           root_span_id: state.effectiveRootSpanId,
-          output: state.currentOutput || undefined,
-          metrics: {
-            end: wallClock.now(),
+          span_parents: [state.rootSpanId],
+          created: new Date(now).toISOString(),
+          input: userMessage || undefined, // Send undefined if empty, not empty string
+          metadata: {
+            turn_number: state.turnNumber,
+            agent: messageInput.agent,
+            // Flatten model object to string since Braintrust expects string values
+            model:
+              typeof messageInput.model === "object" && messageInput.model
+                ? `${(messageInput.model as { providerID?: string }).providerID}/${(messageInput.model as { modelID?: string }).modelID}`
+                : String(messageInput.model || ""),
           },
-          _is_merge: true,
+          metrics: {
+            start: now,
+          },
+          span_attributes: {
+            name: `Turn ${state.turnNumber}`,
+            type: "task",
+          },
         }
-        await btClient.insertSpan(prevTurnSpan, log)
+
+        const rowId = await btClient.insertSpan(turnSpan, log)
+        log("Created turn span", {
+          turnNumber: state.turnNumber,
+          input: userMessage,
+          rowId,
+          spanId: state.currentTurnSpanId,
+        })
+      } catch (error) {
+        log("Error in chat.message hook", { error: String(error) })
+        client.app
+          .log({
+            body: {
+              service: "braintrust-trace",
+              level: "error",
+              message: `chat.message hook error: ${error}`,
+            },
+          })
+          .catch(() => {})
       }
-
-      // Create new turn span
-      state.turnNumber++
-      state.currentTurnSpanId = generateUUID()
-      state.currentOutput = undefined
-
-      // Extract user message from parts
-      const userMessage =
-        output.parts
-          ?.filter((p: { type: string }) => p.type === "text")
-          .map((p: { type: string; text?: string }) => p.text)
-          .join("\n") || ""
-
-      state.currentInput = userMessage
-      const now = wallClock.now()
-      state.currentTurnStartTime = now
-      log("User message extracted", {
-        userMessage,
-        hasInput: !!userMessage,
-        inputLength: userMessage.length,
-      })
-
-      const turnSpan: SpanData = {
-        id: state.currentTurnSpanId, // Use span_id as id so merges work
-        span_id: state.currentTurnSpanId,
-        root_span_id: state.effectiveRootSpanId,
-        span_parents: [state.rootSpanId],
-        created: new Date(now).toISOString(),
-        input: userMessage || undefined, // Send undefined if empty, not empty string
-        metadata: {
-          turn_number: state.turnNumber,
-          agent: messageInput.agent,
-          // Flatten model object to string since Braintrust expects string values
-          model:
-            typeof messageInput.model === "object" && messageInput.model
-              ? `${(messageInput.model as { providerID?: string }).providerID}/${(messageInput.model as { modelID?: string }).modelID}`
-              : String(messageInput.model || ""),
-        },
-        metrics: {
-          start: now,
-        },
-        span_attributes: {
-          name: `Turn ${state.turnNumber}`,
-          type: "task",
-        },
-      }
-
-      const rowId = await btClient.insertSpan(turnSpan, log)
-      log("Created turn span", {
-        turnNumber: state.turnNumber,
-        input: userMessage,
-        rowId,
-        spanId: state.currentTurnSpanId,
-      })
     },
 
     // Track tool executions
     "tool.execute.before": async (toolInput, _output) => {
-      const { tool, sessionID, callID } = toolInput
-      log("Tool execute before", { tool, sessionID, callID })
+      try {
+        const { tool, sessionID, callID } = toolInput
+        log("Tool execute before", { tool, sessionID, callID })
 
-      // Store start time for this tool call
-      const state = sessionStates.get(sessionID)
-      if (state) {
-        state.toolStartTimes.set(callID, wallClock.now())
+        // Store start time for this tool call
+        const state = sessionStates.get(sessionID)
+        if (state) {
+          state.toolStartTimes.set(callID, wallClock.now())
+        }
+      } catch (error) {
+        log("Error in tool.execute.before hook", { error: String(error) })
+        client.app
+          .log({
+            body: {
+              service: "braintrust-trace",
+              level: "error",
+              message: `tool.execute.before hook error: ${error}`,
+            },
+          })
+          .catch(() => {})
       }
     },
 
     "tool.execute.after": async (toolInput, result) => {
-      const { tool, sessionID, callID } = toolInput
-      log("Tool execute after", { tool, sessionID, callID })
+      try {
+        const { tool, sessionID, callID } = toolInput
+        log("Tool execute after", { tool, sessionID, callID })
 
-      const state = sessionStates.get(sessionID)
-      if (!state || !state.currentTurnSpanId) {
-        log("No state or turn for tool", { sessionID })
-        return
+        const state = sessionStates.get(sessionID)
+        if (!state || !state.currentTurnSpanId) {
+          log("No state or turn for tool", { sessionID })
+          return
+        }
+
+        state.toolCallCount++
+
+        // Get start time and clean up
+        const startTime = state.toolStartTimes.get(callID)
+        state.toolStartTimes.delete(callID)
+
+        // Look up reasoning for this tool call via messageId
+        const messageId = state.toolCallMessageIds.get(callID)
+        const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
+        state.toolCallMessageIds.delete(callID)
+
+        // Create tool span
+        const toolSpanId = generateUUID()
+        const endTime = wallClock.now()
+        const toolOutput =
+          typeof result.output === "string" ? result.output.substring(0, 10000) : result.output
+        const toolSpan: SpanData = {
+          id: generateUUID(),
+          span_id: toolSpanId,
+          root_span_id: state.effectiveRootSpanId,
+          span_parents: [state.currentTurnSpanId],
+          input: result.metadata,
+          output: toolOutput, // Truncate large string outputs
+          metadata: {
+            tool_name: tool,
+            call_id: callID,
+            title: result.title,
+            reasoning: reasoning || undefined,
+          },
+          metrics: {
+            start: startTime,
+            end: endTime,
+          },
+          span_attributes: {
+            name: formatToolName(tool, result.title),
+            type: "tool",
+          },
+        }
+
+        await btClient.insertSpan(toolSpan, log)
+        log("Created tool span", {
+          tool,
+          callID,
+          startTime,
+          endTime,
+          hasReasoning: !!reasoning,
+          reasoningLength: reasoning?.length || 0,
+        })
+      } catch (error) {
+        log("Error in tool.execute.after hook", { error: String(error) })
+        client.app
+          .log({
+            body: {
+              service: "braintrust-trace",
+              level: "error",
+              message: `tool.execute.after hook error: ${error}`,
+            },
+          })
+          .catch(() => {})
       }
-
-      state.toolCallCount++
-
-      // Get start time and clean up
-      const startTime = state.toolStartTimes.get(callID)
-      state.toolStartTimes.delete(callID)
-
-      // Look up reasoning for this tool call via messageId
-      const messageId = state.toolCallMessageIds.get(callID)
-      const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
-      state.toolCallMessageIds.delete(callID)
-
-      // Create tool span
-      const toolSpanId = generateUUID()
-      const endTime = wallClock.now()
-      const toolSpan: SpanData = {
-        id: generateUUID(),
-        span_id: toolSpanId,
-        root_span_id: state.effectiveRootSpanId,
-        span_parents: [state.currentTurnSpanId],
-        input: result.metadata,
-        output: result.output.substring(0, 10000), // Truncate large outputs
-        metadata: {
-          tool_name: tool,
-          call_id: callID,
-          title: result.title,
-          reasoning: reasoning || undefined,
-        },
-        metrics: {
-          start: startTime,
-          end: endTime,
-        },
-        span_attributes: {
-          name: formatToolName(tool, result.title),
-          type: "tool",
-        },
-      }
-
-      await btClient.insertSpan(toolSpan, log)
-      log("Created tool span", {
-        tool,
-        callID,
-        startTime,
-        endTime,
-        hasReasoning: !!reasoning,
-        reasoningLength: reasoning?.length || 0,
-      })
     },
   }
 }
