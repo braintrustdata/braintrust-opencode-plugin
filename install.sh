@@ -26,8 +26,8 @@ PLUGIN_DIR="$HOME/.config/opencode/plugin"
 mkdir -p "$PLUGIN_DIR"
 
 # Copy plugin to OpenCode
-echo "Installing plugin to $PLUGIN_DIR/braintrust.js"
-cp dist/index.js "$PLUGIN_DIR/braintrust.js"
+echo "Installing plugin to $PLUGIN_DIR/trace-opencode.js"
+cp dist/index.js "$PLUGIN_DIR/trace-opencode.js"
 
 echo ""
 echo "✓ Plugin installed successfully!"
