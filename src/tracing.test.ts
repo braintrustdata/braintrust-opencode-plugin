@@ -612,3 +612,126 @@ describe("Fail-open: chat.message with missing output", () => {
     expect(tree?.children[0]?.name).toBe("Turn 1")
   })
 })
+
+describe("Additional metadata on root span", () => {
+  it("includes additional_metadata on root span", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(
+      collector,
+      {
+        projectName: "test-project",
+        additionalMetadata: { ci: true, run_id: "abc-123", env: "staging" },
+      },
+      { clock },
+    )
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_meta",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_meta" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    // Additional metadata should be present
+    expect(tree?.metadata?.ci).toBe(true)
+    expect(tree?.metadata?.run_id).toBe("abc-123")
+    expect(tree?.metadata?.env).toBe("staging")
+    // Standard metadata should also be present
+    expect(tree?.metadata?.session_id).toBe("ses_meta")
+  })
+
+  it("standard metadata overrides additional_metadata on conflict", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(
+      collector,
+      {
+        projectName: "test-project",
+        directory: "/real-dir",
+        additionalMetadata: {
+          session_id: "should-be-overridden",
+          directory: "should-be-overridden",
+          custom: "kept",
+        },
+      },
+      { clock },
+    )
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_conflict",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_conflict" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    // Standard fields win over additional_metadata
+    expect(tree?.metadata?.session_id).toBe("ses_conflict")
+    expect(tree?.metadata?.directory).toBe("/real-dir")
+    // Non-conflicting additional_metadata is preserved
+    expect(tree?.metadata?.custom).toBe("kept")
+  })
+
+  it("works without additional_metadata (undefined)", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test-project" }, { clock })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_no_meta",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_no_meta" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    expect(tree?.metadata?.session_id).toBe("ses_no_meta")
+  })
+})

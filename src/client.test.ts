@@ -58,6 +58,7 @@ describe("loadConfig", () => {
     "BRAINTRUST_APP_URL",
     "BRAINTRUST_ORG_NAME",
     "BRAINTRUST_PROJECT",
+    "BRAINTRUST_ADDITIONAL_METADATA",
   ]
 
   beforeEach(() => {
@@ -213,6 +214,51 @@ describe("loadConfig", () => {
       const config = loadConfig(pluginConfig)
       expect(config.apiKey).toBe("env-key") // overridden
       expect(config.projectName).toBe("config-project") // from pluginConfig
+    })
+  })
+
+  describe("additional_metadata", () => {
+    it("defaults to undefined when not set", () => {
+      const config = loadConfig()
+      expect(config.additionalMetadata).toBeUndefined()
+    })
+
+    it("loads from pluginConfig", () => {
+      const pluginConfig: PluginConfig = {
+        additional_metadata: { foo: "bar", env: "prod" },
+      }
+      const config = loadConfig(pluginConfig)
+      expect(config.additionalMetadata).toEqual({ foo: "bar", env: "prod" })
+    })
+
+    it("loads from BRAINTRUST_ADDITIONAL_METADATA env var (JSON)", () => {
+      process.env.BRAINTRUST_ADDITIONAL_METADATA = '{"ci": true, "run_id": "123"}'
+      const config = loadConfig()
+      expect(config.additionalMetadata).toEqual({ ci: true, run_id: "123" })
+    })
+
+    it("env var overrides pluginConfig", () => {
+      process.env.BRAINTRUST_ADDITIONAL_METADATA = '{"from": "env"}'
+      const pluginConfig: PluginConfig = {
+        additional_metadata: { from: "config" },
+      }
+      const config = loadConfig(pluginConfig)
+      expect(config.additionalMetadata).toEqual({ from: "env" })
+    })
+
+    it("ignores invalid JSON in env var and falls back to pluginConfig", () => {
+      process.env.BRAINTRUST_ADDITIONAL_METADATA = "not valid json"
+      const pluginConfig: PluginConfig = {
+        additional_metadata: { fallback: true },
+      }
+      const config = loadConfig(pluginConfig)
+      expect(config.additionalMetadata).toEqual({ fallback: true })
+    })
+
+    it("ignores invalid JSON in env var with no pluginConfig", () => {
+      process.env.BRAINTRUST_ADDITIONAL_METADATA = "{broken"
+      const config = loadConfig()
+      expect(config.additionalMetadata).toBeUndefined()
     })
   })
 })

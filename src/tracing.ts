@@ -235,6 +235,7 @@ export function createTracingHooks(
             root_span_id: rootSpanId,
             created: new Date(state.startTime).toISOString(),
             metadata: {
+              ...config.additionalMetadata,
               session_id: sessionKey,
               workspace: input.worktree,
               directory: input.directory,

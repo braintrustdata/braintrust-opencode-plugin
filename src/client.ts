@@ -10,6 +10,7 @@ export interface BraintrustConfig {
   projectName: string
   tracingEnabled: boolean
   debug: boolean
+  additionalMetadata?: Record<string, unknown>
 }
 
 /**
@@ -24,6 +25,7 @@ export interface PluginConfig {
   project?: string
   trace_to_braintrust?: boolean
   debug?: boolean
+  additional_metadata?: Record<string, unknown>
 }
 
 export interface SpanData {
@@ -116,9 +118,21 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     if (pluginConfig.debug !== undefined) {
       defaults.debug = pluginConfig.debug
     }
+    if (pluginConfig.additional_metadata) {
+      defaults.additionalMetadata = pluginConfig.additional_metadata
+    }
   }
 
   // Layer 2: Apply environment variables (override opencode.json)
+  let additionalMetadata = defaults.additionalMetadata
+  if (process.env.BRAINTRUST_ADDITIONAL_METADATA) {
+    try {
+      additionalMetadata = JSON.parse(process.env.BRAINTRUST_ADDITIONAL_METADATA)
+    } catch {
+      // Invalid JSON in env var — ignore and keep config file value (if any)
+    }
+  }
+
   return {
     apiKey: process.env.BRAINTRUST_API_KEY || defaults.apiKey,
     apiUrl: process.env.BRAINTRUST_API_URL || defaults.apiUrl,
@@ -131,6 +145,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     debug: process.env.BRAINTRUST_DEBUG
       ? parseBooleanEnv(process.env.BRAINTRUST_DEBUG)
       : defaults.debug,
+    additionalMetadata,
   }
 }
 

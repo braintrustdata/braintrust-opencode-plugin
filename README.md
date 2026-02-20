@@ -61,6 +61,7 @@ Create a `braintrust.json` file in one of these locations:
 | `api_url` | `BRAINTRUST_API_URL` | string | `"https://api.braintrust.dev"` | API URL |
 | `app_url` | `BRAINTRUST_APP_URL` | string | `"https://www.braintrust.dev"` | App URL |
 | `org_name` | `BRAINTRUST_ORG_NAME` | string | | Organization name |
+| `additional_metadata` | `BRAINTRUST_ADDITIONAL_METADATA` | string | | JSON object of additional metadata to attach to the root span. Standard metadata keys take precedence on conflict. |
 
 ### Precedence
 
@@ -70,6 +71,26 @@ Configuration is loaded with the following precedence (later overrides earlier):
 2. `~/.config/opencode/braintrust.json` (global config)
 3. `.opencode/braintrust.json` (project config)
 4. Environment variables (highest priority)
+
+## Adding Dynamic Metadata
+
+Use `BRAINTRUST_ADDITIONAL_METADATA` to attach custom key-value pairs to the root span. This is useful for tagging traces in CI or linking them back to a specific run.
+
+```bash
+BRAINTRUST_ADDITIONAL_METADATA='{"ci": true, "run_id": "abc-123"}' opencode run "do the thing"
+```
+
+You can also set it via the config file:
+
+```json
+{
+  "additional_metadata": {
+    "team": "platform"
+  }
+}
+```
+
+The value must be a JSON object. Any keys that conflict with standard root span metadata (`session_id`, `workspace`, `directory`, `hostname`, `username`, `os`) will be overridden by the standard values.
 
 ## Trace Structure
 

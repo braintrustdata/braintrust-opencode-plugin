@@ -51,6 +51,7 @@ export interface EventProcessorConfig {
   projectName: string
   worktree?: string
   directory?: string
+  additionalMetadata?: Record<string, unknown>
 }
 
 /**
@@ -354,6 +355,7 @@ export class EventProcessor {
       root_span_id: rootSpanId,
       created: new Date(state.startTime).toISOString(),
       metadata: {
+        ...this.config.additionalMetadata,
         session_id: sessionKey,
         workspace: this.config.worktree,
         directory: this.config.directory,
