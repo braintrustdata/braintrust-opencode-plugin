@@ -185,7 +185,7 @@ In an OpenCode session, try:
 2. **Update CHANGELOG.md** - Move items from `[Unreleased]` to a new version section
 3. **Commit the version bump**
    ```bash
-   git add package.json CHANGELOG.md
+   git add package.json
    git commit -m "chore: release v0.x.x"
    ```
 4. **Create a git tag**
