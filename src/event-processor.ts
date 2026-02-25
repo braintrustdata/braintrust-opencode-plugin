@@ -45,6 +45,8 @@ interface SessionState {
   // Tool span tracking
   toolStartTimes: Map<string, number>
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
+  toolCallArgs: Map<string, unknown> // callID -> tool arguments
+  toolCallOutputs: Map<string, unknown> // callID -> tool output (captured from message.part.updated completed state)
 }
 
 export interface EventProcessorConfig {
@@ -184,10 +186,13 @@ export class EventProcessor {
   /**
    * Process a tool.execute.before hook call
    */
-  async processToolExecuteBefore(sessionID: string, callID: string): Promise<void> {
+  async processToolExecuteBefore(sessionID: string, callID: string, args?: unknown): Promise<void> {
     const state = this.sessionStates.get(sessionID)
     if (state) {
       state.toolStartTimes.set(callID, this.clock.now())
+      if (args !== undefined) {
+        state.toolCallArgs.set(callID, args)
+      }
     }
   }
 
@@ -213,6 +218,14 @@ export class EventProcessor {
     const startTime = state.toolStartTimes.get(callID)
     state.toolStartTimes.delete(callID)
 
+    // Get tool args captured in processToolExecuteBefore
+    const toolArgs = state.toolCallArgs.get(callID)
+    state.toolCallArgs.delete(callID)
+
+    // Get tool output captured from message.part.updated completed state
+    const capturedOutput = state.toolCallOutputs.get(callID)
+    state.toolCallOutputs.delete(callID)
+
     // Look up reasoning for this tool call via messageId
     const messageId = state.toolCallMessageIds.get(callID)
     const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
@@ -220,13 +233,15 @@ export class EventProcessor {
 
     const toolSpanId = generateUUID()
     const endTime = this.clock.now()
+    // Prefer output captured from message.part.updated, fall back to hook output param
+    const rawOutput = capturedOutput !== undefined ? capturedOutput : output
     const toolSpan: SpanData = {
       id: generateUUID(),
       span_id: toolSpanId,
       root_span_id: state.effectiveRootSpanId,
       span_parents: [state.currentTurnSpanId],
-      input: metadata,
-      output: typeof output === "string" ? output.substring(0, 10000) : output,
+      input: toolArgs !== undefined ? toolArgs : metadata,
+      output: typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput,
       metadata: {
         tool_name: tool,
         call_id: callID,
@@ -296,6 +311,8 @@ export class EventProcessor {
           processedLlmMessages: new Set(),
           toolStartTimes: new Map(),
           toolCallMessageIds: new Map(),
+          toolCallArgs: new Map(),
+          toolCallOutputs: new Map(),
         }
         this.sessionStates.set(sessionID, childState)
 
@@ -346,6 +363,8 @@ export class EventProcessor {
       processedLlmMessages: new Set(),
       toolStartTimes: new Map(),
       toolCallMessageIds: new Map(),
+      toolCallArgs: new Map(),
+      toolCallOutputs: new Map(),
     }
     this.sessionStates.set(sessionKey, state)
 
@@ -435,6 +454,12 @@ export class EventProcessor {
 
         // Store messageId for this callID so we can look up reasoning later
         state.toolCallMessageIds.set(callID, messageId)
+
+        // Capture tool output when state is completed
+        if (partState?.status === "completed" && partState?.output !== undefined) {
+          state.toolCallOutputs.set(callID, partState.output)
+          this.log("Captured tool output from completed state", { callID })
+        }
 
         this.log("Tracking LLM tool call", { messageId, callID, tool })
       }

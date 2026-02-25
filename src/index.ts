@@ -8,6 +8,7 @@
 
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
 import { BraintrustClient, loadConfig, type PluginConfig } from "./client"
+import { createFileLogger } from "./file-logger"
 import { createBraintrustTools } from "./tools"
 import { createTracingHooks } from "./tracing"
 
@@ -46,6 +47,21 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 
   const config = loadConfig(pluginConfig)
 
+  // Set up file logger if LOG_TO_FILE is configured
+  const fileLogger = createFileLogger(config.logToFile)
+  if (fileLogger) {
+    fileLogger.logConfig(config as unknown as Record<string, unknown>)
+    client.app
+      .log({
+        body: {
+          service: "braintrust",
+          level: "info",
+          message: `Plugin I/O logging enabled: ${fileLogger.getFilePath()}`,
+        },
+      })
+      .catch(() => {})
+  }
+
   // Create Braintrust client but don't initialize yet (lazy initialization)
   let btClient: BraintrustClient | undefined
   let _initPromise: Promise<void> | undefined
@@ -72,7 +88,7 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 
   // Add tracing hooks if enabled
   if (config.tracingEnabled && btClient) {
-    const tracingHooks = createTracingHooks(btClient, input, config)
+    const tracingHooks = createTracingHooks(btClient, input, config, fileLogger ?? undefined)
     Object.assign(hooks, tracingHooks)
 
     // Log what hooks we're returning

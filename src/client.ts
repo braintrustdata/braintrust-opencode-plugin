@@ -10,6 +10,7 @@ export interface BraintrustConfig {
   projectName: string
   tracingEnabled: boolean
   debug: boolean
+  logToFile?: string // Path to write NDJSON log of all plugin I/O, or "auto" for default path
   additionalMetadata?: Record<string, unknown>
 }
 
@@ -25,6 +26,7 @@ export interface PluginConfig {
   project?: string
   trace_to_braintrust?: boolean
   debug?: boolean
+  log_to_file?: string // Path to write NDJSON log of all plugin I/O, or "true"/"auto" for default path
   additional_metadata?: Record<string, unknown>
 }
 
@@ -103,6 +105,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     projectName: "opencode",
     tracingEnabled: false,
     debug: false,
+    logToFile: undefined,
   }
 
   // Layer 1: Apply opencode.json config (if provided)
@@ -117,6 +120,9 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     }
     if (pluginConfig.debug !== undefined) {
       defaults.debug = pluginConfig.debug
+    }
+    if (pluginConfig.log_to_file !== undefined) {
+      defaults.logToFile = pluginConfig.log_to_file
     }
     if (pluginConfig.additional_metadata) {
       defaults.additionalMetadata = pluginConfig.additional_metadata
@@ -133,6 +139,13 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     }
   }
 
+  // Resolve logToFile: env var LOG_TO_FILE overrides config file
+  // Values: a file path, "true"/"auto" (use default path), or unset/falsy (disabled)
+  let logToFile = defaults.logToFile
+  if (process.env.LOG_TO_FILE) {
+    logToFile = process.env.LOG_TO_FILE
+  }
+
   return {
     apiKey: process.env.BRAINTRUST_API_KEY || defaults.apiKey,
     apiUrl: process.env.BRAINTRUST_API_URL || defaults.apiUrl,
@@ -145,6 +158,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     debug: process.env.BRAINTRUST_DEBUG
       ? parseBooleanEnv(process.env.BRAINTRUST_DEBUG)
       : defaults.debug,
+    logToFile,
     additionalMetadata,
   }
 }

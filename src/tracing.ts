@@ -11,6 +11,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { BraintrustClient, BraintrustConfig, SpanData } from "./client"
 import { wallClock } from "./clock"
+import type { FileLogger } from "./file-logger"
 
 // Generate a UUID
 function generateUUID(): string {
@@ -46,6 +47,8 @@ interface SessionState {
   // Tool span tracking
   toolStartTimes: Map<string, number> // callID -> start timestamp
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
+  toolCallArgs: Map<string, Record<string, unknown> | unknown> // callID -> tool arguments
+  toolCallOutputs: Map<string, unknown> // callID -> tool output (captured from message.part.updated completed state)
 }
 
 const sessionStates = new Map<string, SessionState>()
@@ -57,6 +60,7 @@ export function createTracingHooks(
   btClient: BraintrustClient,
   input: PluginInput,
   config: BraintrustConfig,
+  fileLogger?: FileLogger,
 ): Partial<Hooks> {
   const { client } = input
   const debug = config.debug
@@ -99,6 +103,15 @@ export function createTracingHooks(
           },
         })
         .catch(() => {})
+
+      // Extract session ID for file logger tagging (best-effort)
+      const _propsForLog = event.properties as Record<string, unknown>
+      const _infoForLog = _propsForLog.info as Record<string, unknown> | undefined
+      const _sessionIdForLog =
+        (_propsForLog.sessionID as string) ||
+        (_infoForLog?.id as string) ||
+        (_propsForLog.id as string)
+      fileLogger?.logEvent(event, _sessionIdForLog)
 
       try {
         // Log every event to understand what we're receiving
@@ -158,6 +171,8 @@ export function createTracingHooks(
                 processedLlmMessages: new Set(),
                 toolStartTimes: new Map(),
                 toolCallMessageIds: new Map(),
+                toolCallArgs: new Map(),
+                toolCallOutputs: new Map(),
               }
               sessionStates.set(childSessionID, childState)
 
@@ -226,6 +241,8 @@ export function createTracingHooks(
             processedLlmMessages: new Set(),
             toolStartTimes: new Map(),
             toolCallMessageIds: new Map(),
+            toolCallArgs: new Map(),
+            toolCallOutputs: new Map(),
           }
           sessionStates.set(sessionKey, state)
 
@@ -332,6 +349,15 @@ export function createTracingHooks(
 
               // Store messageId for this callID so we can look up reasoning later
               state.toolCallMessageIds.set(callID, messageId)
+
+              // Capture tool output when state is completed
+              if (partState?.status === "completed" && partState?.output !== undefined) {
+                state.toolCallOutputs.set(callID, partState.output)
+                log("Captured tool output from completed state", {
+                  callID,
+                  outputType: typeof partState.output,
+                })
+              }
 
               log("Tracking LLM tool call", { messageId, callID, tool })
             }
@@ -688,6 +714,7 @@ export function createTracingHooks(
 
     // Create turn span when user sends a message
     "chat.message": async (messageInput, output) => {
+      fileLogger?.logChatMessage(messageInput, output, messageInput.sessionID)
       try {
         const { sessionID } = messageInput
         log("Chat message", { sessionID, parts: output?.parts })
@@ -781,15 +808,19 @@ export function createTracingHooks(
     },
 
     // Track tool executions
-    "tool.execute.before": async (toolInput, _output) => {
+    "tool.execute.before": async (toolInput, output) => {
+      fileLogger?.logToolBefore(toolInput, output, toolInput.sessionID)
       try {
         const { tool, sessionID, callID } = toolInput
         log("Tool execute before", { tool, sessionID, callID })
 
-        // Store start time for this tool call
+        // Store start time and args for this tool call
         const state = sessionStates.get(sessionID)
         if (state) {
           state.toolStartTimes.set(callID, wallClock.now())
+          if (output?.args !== undefined) {
+            state.toolCallArgs.set(callID, output.args)
+          }
         }
       } catch (error) {
         log("Error in tool.execute.before hook", { error: String(error) })
@@ -806,9 +837,18 @@ export function createTracingHooks(
     },
 
     "tool.execute.after": async (toolInput, result) => {
+      fileLogger?.logToolAfter(toolInput, result, toolInput.sessionID)
       try {
         const { tool, sessionID, callID } = toolInput
-        log("Tool execute after", { tool, sessionID, callID })
+        log("Tool execute after", {
+          tool,
+          sessionID,
+          callID,
+          resultOutput: result.output,
+          resultOutputType: typeof result.output,
+          resultTitle: result.title,
+          resultMetadata: result.metadata,
+        })
 
         const state = sessionStates.get(sessionID)
         if (!state || !state.currentTurnSpanId) {
@@ -822,6 +862,14 @@ export function createTracingHooks(
         const startTime = state.toolStartTimes.get(callID)
         state.toolStartTimes.delete(callID)
 
+        // Get tool args captured in tool.execute.before
+        const toolArgs = state.toolCallArgs.get(callID)
+        state.toolCallArgs.delete(callID)
+
+        // Get tool output captured from message.part.updated completed state
+        const capturedOutput = state.toolCallOutputs.get(callID)
+        state.toolCallOutputs.delete(callID)
+
         // Look up reasoning for this tool call via messageId
         const messageId = state.toolCallMessageIds.get(callID)
         const reasoning = messageId ? state.llmReasoningParts.get(messageId) : undefined
@@ -830,14 +878,15 @@ export function createTracingHooks(
         // Create tool span
         const toolSpanId = generateUUID()
         const endTime = wallClock.now()
-        const toolOutput =
-          typeof result.output === "string" ? result.output.substring(0, 10000) : result.output
+        // Prefer output captured from message.part.updated, fall back to result.output
+        const rawOutput = capturedOutput !== undefined ? capturedOutput : result.output
+        const toolOutput = typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput
         const toolSpan: SpanData = {
           id: generateUUID(),
           span_id: toolSpanId,
           root_span_id: state.effectiveRootSpanId,
           span_parents: [state.currentTurnSpanId],
-          input: result.metadata,
+          input: toolArgs !== undefined ? toolArgs : result.metadata,
           output: toolOutput, // Truncate large string outputs
           metadata: {
             tool_name: tool,

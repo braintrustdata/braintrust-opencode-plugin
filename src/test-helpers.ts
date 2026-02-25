@@ -17,6 +17,7 @@ import type {
   Session,
   TextPart,
   ToolPart,
+  ToolStateCompleted,
   ToolStateRunning,
 } from "@opencode-ai/sdk"
 import { TestClock } from "./clock"
@@ -251,6 +252,40 @@ export function toolCallPart(
 }
 
 /**
+ * Create message.part.updated event for a completed tool call (output captured from state)
+ */
+export function toolCallCompletedPart(
+  sessionID: string,
+  messageID: string,
+  callID: string,
+  tool: string,
+  args: Record<string, unknown>,
+  output: string,
+): EventMessagePartUpdated {
+  const toolState: ToolStateCompleted = {
+    status: "completed",
+    input: args,
+    output,
+    title: tool,
+    metadata: {},
+    time: { start: Date.now() - 100, end: Date.now() },
+  }
+  const part: ToolPart = {
+    id: `prt_tool_${callID}`,
+    sessionID,
+    messageID,
+    type: "tool",
+    callID,
+    tool,
+    state: toolState,
+  }
+  return {
+    type: "message.part.updated",
+    properties: { part },
+  }
+}
+
+/**
  * Create message.updated event for assistant message completion
  */
 export function messageCompleted(
@@ -401,7 +436,7 @@ export async function eventsToTree(
           input: Record<string, unknown>
           output: string | undefined | unknown
         }
-        await processor.processToolExecuteBefore(sessionID, hook.callID)
+        await processor.processToolExecuteBefore(sessionID, hook.callID, hook.input)
         clock.tick() // Advance time between before and after
         await processor.processToolExecuteAfter(
           sessionID,
