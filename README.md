@@ -12,7 +12,7 @@ Add to your OpenCode configuration (`opencode.json` or `~/.config/opencode/openc
 
 ```json
 {
-  "plugin": ["@braintrust/trace-opencode"]
+  "plugin": ["@braintrust/trace-opencode@0.0.x"], <--- replace with latest version
 }
 ```
 
