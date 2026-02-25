@@ -11,6 +11,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { BraintrustClient, BraintrustConfig, SpanData } from "./client"
 import { wallClock } from "./clock"
+import { extractToolOutput } from "./event-processor"
 import type { FileLogger } from "./file-logger"
 
 // Generate a UUID
@@ -878,8 +879,10 @@ export function createTracingHooks(
         // Create tool span
         const toolSpanId = generateUUID()
         const endTime = wallClock.now()
-        // Prefer output captured from message.part.updated, fall back to result.output
-        const rawOutput = capturedOutput !== undefined ? capturedOutput : result.output
+        // Prefer output captured from message.part.updated, fall back to result.output.
+        // MCP tools return { content: [...] } instead of a plain output value.
+        const rawOutput =
+          capturedOutput !== undefined ? capturedOutput : extractToolOutput(result.output ?? result)
         const toolOutput = typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput
         const toolSpan: SpanData = {
           id: generateUUID(),

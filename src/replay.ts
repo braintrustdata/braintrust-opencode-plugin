@@ -108,6 +108,7 @@ export async function replayLogFile(
     sessionID: string
     model?: { providerID?: string; modelID?: string }
   } | null = null
+  let pendingToolBeforeInput: RawToolInput | null = null
   let pendingToolAfterInput: RawToolInput | null = null
 
   for (const record of records) {
@@ -142,11 +143,23 @@ export async function replayLogFile(
       }
 
       case "tool.before.input": {
-        const input = record.data as RawToolInput
-        const sessionID = input.sessionID ?? record.session_id
-        const callID = input.callID
+        // Buffer: args may arrive in the paired tool.before.output record
+        pendingToolBeforeInput = record.data as RawToolInput
+        break
+      }
+
+      case "tool.before.output": {
+        // Flush buffered tool.before.input, merging args from this output record
+        if (!pendingToolBeforeInput) break
+        const toolInput = pendingToolBeforeInput
+        pendingToolBeforeInput = null
+        const sessionID = toolInput.sessionID ?? record.session_id
+        const callID = toolInput.callID
         if (!sessionID || !callID) break
-        await processor.processToolExecuteBefore(sessionID, callID, input.args)
+        // Args may be on the input record (built-in tools) or output record (MCP tools)
+        const outputData = record.data as { args?: unknown }
+        const args = toolInput.args ?? outputData.args
+        await processor.processToolExecuteBefore(sessionID, callID, args)
         break
       }
 
@@ -163,12 +176,15 @@ export async function replayLogFile(
         const { callID, tool } = toolInput
         if (!sessionID || !callID || !tool) break
         const result = record.data as RawToolResult
+        // Pass the whole result object as output so extractToolOutput can handle
+        // MCP { content: [...] } responses as well as plain { output: "..." } ones.
+        const outputValue = result.output !== undefined ? result.output : record.data
         await processor.processToolExecuteAfter(
           sessionID,
           callID,
           tool,
           result.title ?? tool,
-          result.output,
+          outputValue,
           result.metadata,
         )
         break

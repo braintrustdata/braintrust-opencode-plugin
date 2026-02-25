@@ -233,8 +233,10 @@ export class EventProcessor {
 
     const toolSpanId = generateUUID()
     const endTime = this.clock.now()
-    // Prefer output captured from message.part.updated, fall back to hook output param
-    const rawOutput = capturedOutput !== undefined ? capturedOutput : output
+    // Prefer output captured from message.part.updated, fall back to hook output param.
+    // MCP tools return { content: [{ type: "text", text: "..." }] } instead of a plain
+    // output value, so extract the text from content[] as a last resort.
+    const rawOutput = capturedOutput !== undefined ? capturedOutput : extractToolOutput(output)
     const toolSpan: SpanData = {
       id: generateUUID(),
       span_id: toolSpanId,
@@ -780,6 +782,38 @@ export class EventProcessor {
     }
     return tool
   }
+}
+
+/**
+ * Normalize the output value from a tool.execute.after hook result.
+ *
+ * Built-in tools return a plain string/object in `result.output`.
+ * MCP tools return `{ content: [{ type: "text", text: "..." }, ...] }` with no
+ * `output` field.  This function extracts a usable output value from either form.
+ */
+export function extractToolOutput(output: unknown): unknown {
+  if (output === undefined || output === null) return undefined
+
+  // Already a primitive — use as-is
+  if (typeof output !== "object") return output
+
+  const obj = output as Record<string, unknown>
+
+  // MCP content array: { content: [{ type: "text", text: "..." }] }
+  if (Array.isArray(obj.content)) {
+    const textParts = (obj.content as Array<{ type?: string; text?: string }>)
+      .filter((c) => c.type === "text" && typeof c.text === "string")
+      .map((c) => c.text as string)
+    if (textParts.length > 0) return textParts.join("\n")
+    // Non-text content (images etc.) — return the array as-is
+    return obj.content
+  }
+
+  // Plain object with an output field — unwrap it
+  if (obj.output !== undefined) return obj.output
+
+  // Anything else — pass through
+  return output
 }
 
 /**

@@ -9,9 +9,9 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { TestClock } from "./clock"
-import { EventProcessor } from "./event-processor"
+import { EventProcessor, extractToolOutput } from "./event-processor"
 import { FileLogger } from "./file-logger"
-import { replayLogFileToTree } from "./replay"
+import { replayLogFile, replayLogFileToTree } from "./replay"
 import { spansToTree, TestSpanCollector } from "./span-sink"
 import {
   assertEventsProduceTree,
@@ -1043,5 +1043,80 @@ describe("Log file replay", () => {
     const llmSpan = turn?.children.find((c) => c.type === "llm")
     expect(llmSpan).toBeDefined()
     expect(llmSpan?.metrics?.prompt_tokens).toBe(20)
+  })
+})
+
+describe("extractToolOutput", () => {
+  it("passes through plain string output unchanged", () => {
+    expect(extractToolOutput("hello")).toBe("hello")
+  })
+
+  it("passes through undefined as undefined", () => {
+    expect(extractToolOutput(undefined)).toBeUndefined()
+  })
+
+  it("extracts text from MCP content array", () => {
+    const mcpResult = {
+      content: [
+        { type: "text", text: "doc result 1" },
+        { type: "text", text: "doc result 2" },
+      ],
+    }
+    expect(extractToolOutput(mcpResult)).toBe("doc result 1\ndoc result 2")
+  })
+
+  it("returns content array as-is when no text parts", () => {
+    const mcpResult = { content: [{ type: "image", data: "base64..." }] }
+    expect(extractToolOutput(mcpResult)).toEqual([{ type: "image", data: "base64..." }])
+  })
+
+  it("passes through plain objects that aren't MCP results", () => {
+    const obj = { foo: "bar" }
+    expect(extractToolOutput(obj)).toEqual(obj)
+  })
+})
+
+describe("MCP tool output fixture replay", () => {
+  it("captures MCP tool input and output from mcp_tool_call.txt fixture", async () => {
+    const fixturePath = path.join(__dirname, "testconvos", "mcp_tool_call.txt")
+
+    // The fixture file contains two appended sessions. replayLogFile processes
+    // all records in order; the second session (ses_36a045ec7ffe) is the one
+    // we assert against — it is a clean standalone MCP doc search session.
+    const spans = await replayLogFile(fixturePath, { projectName: "opencode" })
+    const { spansToTree } = await import("./span-sink")
+
+    // Find the root span for the second session
+    const secondSessionRoot = spans.find(
+      (s) =>
+        s.metadata?.session_id === "ses_36a045ec7ffe1GCIk3kmSBiq9N" &&
+        !s._is_merge &&
+        !s.span_parents?.length,
+    )
+    expect(secondSessionRoot).toBeDefined()
+
+    const tree = spansToTree(
+      spans.filter((s) => s.root_span_id === secondSessionRoot!.root_span_id),
+    )
+
+    expect(tree).not.toBeNull()
+    expect(tree?.name).toBe("OpenCode: opencode")
+
+    const turn = tree?.children[0]
+    expect(turn?.name).toBe("Turn 1")
+
+    const toolSpan = turn?.children.find((c) => c.type === "tool")
+    expect(toolSpan).toBeDefined()
+
+    // Input: the query args passed to the MCP tool
+    const input = toolSpan?.input as Record<string, unknown>
+    expect(input).toBeDefined()
+    expect(input.query).toBe("getting started")
+    expect(input.top_k).toBe(3)
+
+    // Output: extracted from MCP content[] array — must not be undefined
+    expect(toolSpan?.output).toBeDefined()
+    expect(typeof toolSpan?.output).toBe("string")
+    expect(toolSpan?.output as string).toContain("Getting started")
   })
 })
