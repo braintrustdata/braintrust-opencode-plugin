@@ -9,10 +9,12 @@
 
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
-import type { BraintrustClient, BraintrustConfig, SpanData } from "./client"
+import type { BraintrustConfig, SpanData } from "./client"
 import { wallClock } from "./clock"
 import { extractToolOutput } from "./event-processor"
 import type { FileLogger } from "./file-logger"
+import type { SpanQueue } from "./span-queue"
+import type { SpanSink } from "./span-sink"
 
 // Generate a UUID
 function generateUUID(): string {
@@ -58,10 +60,11 @@ const sessionStates = new Map<string, SessionState>()
  * Create tracing hooks for Braintrust
  */
 export function createTracingHooks(
-  btClient: BraintrustClient,
+  btClient: SpanSink,
   input: PluginInput,
   config: BraintrustConfig,
   fileLogger?: FileLogger,
+  queue?: SpanQueue,
 ): Partial<Hooks> {
   const { client } = input
   const debug = config.debug
@@ -78,6 +81,21 @@ export function createTracingHooks(
         },
       })
       .catch(() => {})
+  }
+
+  /**
+   * Enqueue a span for async delivery. When a queue is provided (production) the
+   * call is synchronous and non-blocking. When there is no queue (tests) we fall
+   * back to an awaited direct insert so test assertions can observe results
+   * immediately.
+   */
+  const enqueue = (span: SpanData): void => {
+    if (queue) {
+      queue.enqueue(span)
+    } else {
+      // Fallback: fire-and-forget direct insert (used in tests)
+      btClient.insertSpan(span).catch((e) => log("enqueue fallback: error", { error: String(e) }))
+    }
   }
 
   // Log that we're creating hooks (this runs at plugin load time)
@@ -203,11 +221,9 @@ export function createTracingHooks(
                 },
               }
 
-              const rowId = await btClient.insertSpan(root_span, log)
+              enqueue(root_span)
               log("Created child session root span", {
                 rootSpanId,
-                rowId,
-                success: !!rowId,
                 parentRootSpanId: parentState.effectiveRootSpanId,
               })
               return
@@ -270,8 +286,8 @@ export function createTracingHooks(
             },
           }
 
-          const rowId = await btClient.insertSpan(root_span, log)
-          log("Created root span", { rootSpanId, rowId, success: !!rowId })
+          enqueue(root_span)
+          log("Created root span", { rootSpanId })
         }
         // Track message content from message.part.updated events
         else if (event.type === "message.part.updated") {
@@ -502,13 +518,12 @@ export function createTracingHooks(
             },
           }
 
-          const rowId = await btClient.insertSpan(llmSpan, log)
+          enqueue(llmSpan)
           log("Created LLM span", {
             messageId,
             modelName,
             tokens: totalTokens,
             reasoningTokens,
-            rowId,
             turnSpanId: state.currentTurnSpanId,
             outputLength: outputText.length,
             reasoningLength: reasoningText?.length || 0,
@@ -550,7 +565,7 @@ export function createTracingHooks(
                 },
                 _is_merge: true,
               }
-              await btClient.insertSpan(turnSpan, log)
+              enqueue(turnSpan)
               state.currentTurnSpanId = undefined
               state.currentInput = undefined
               state.currentOutput = undefined
@@ -579,7 +594,7 @@ export function createTracingHooks(
                 },
                 _is_merge: true,
               }
-              await btClient.insertSpan(rootSpan, log)
+              enqueue(rootSpan)
 
               // Clean up child session state
               sessionStates.delete(sessionKey)
@@ -614,7 +629,7 @@ export function createTracingHooks(
                 },
                 _is_merge: true,
               }
-              await btClient.insertSpan(turnSpan, log)
+              enqueue(turnSpan)
             }
 
             // Update root span with end time using merge
@@ -631,9 +646,15 @@ export function createTracingHooks(
               },
               _is_merge: true,
             }
-            await btClient.insertSpan(span, log)
+            enqueue(span)
             sessionStates.delete(sessionKey)
             log("Session span closed", { sessionKey })
+
+            // Flush remaining spans before the session fully exits
+            if (queue) {
+              await queue.flush()
+              log("Queue flushed on session.deleted", { sessionKey })
+            }
           }
         }
         // Handle session error - close spans with error info
@@ -674,7 +695,7 @@ export function createTracingHooks(
                 metrics: { end: now },
                 _is_merge: true,
               }
-              await btClient.insertSpan(turnSpan, log)
+              enqueue(turnSpan)
             }
 
             // Close root span with error and metadata
@@ -691,11 +712,17 @@ export function createTracingHooks(
               },
               _is_merge: true,
             }
-            await btClient.insertSpan(rootSpan, log)
+            enqueue(rootSpan)
 
             // Clean up session state
             sessionStates.delete(sessionKey)
             log("Session error handled", { sessionKey, errorName, errorMessage })
+
+            // Flush remaining spans before the session fully exits
+            if (queue) {
+              await queue.flush()
+              log("Queue flushed on session.error", { sessionKey })
+            }
           }
         } else {
           log(`unhandled event ${event.type}`)
@@ -738,7 +765,7 @@ export function createTracingHooks(
             },
             _is_merge: true,
           }
-          await btClient.insertSpan(prevTurnSpan, log)
+          enqueue(prevTurnSpan)
         }
 
         // Create new turn span
@@ -787,11 +814,10 @@ export function createTracingHooks(
           },
         }
 
-        const rowId = await btClient.insertSpan(turnSpan, log)
+        enqueue(turnSpan)
         log("Created turn span", {
           turnNumber: state.turnNumber,
           input: userMessage,
-          rowId,
           spanId: state.currentTurnSpanId,
         })
       } catch (error) {
@@ -907,7 +933,7 @@ export function createTracingHooks(
           },
         }
 
-        await btClient.insertSpan(toolSpan, log)
+        enqueue(toolSpan)
         log("Created tool span", {
           tool,
           callID,

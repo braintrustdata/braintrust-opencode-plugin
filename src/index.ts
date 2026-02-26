@@ -9,6 +9,7 @@
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
 import { BraintrustClient, loadConfig, type PluginConfig } from "./client"
 import { createFileLogger } from "./file-logger"
+import { DEFAULT_QUEUE_SIZE, SpanQueue } from "./span-queue"
 import { createBraintrustTools } from "./tools"
 import { createTracingHooks } from "./tracing"
 
@@ -88,7 +89,21 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
 
   // Add tracing hooks if enabled
   if (config.tracingEnabled && btClient) {
-    const tracingHooks = createTracingHooks(btClient, input, config, fileLogger ?? undefined)
+    const queue = new SpanQueue(btClient, config.queueSize ?? DEFAULT_QUEUE_SIZE, (msg, data) => {
+      client.app
+        .log({
+          body: {
+            service: "braintrust-queue",
+            level: "error",
+            message: msg,
+            extra: data as Record<string, unknown> | undefined,
+          },
+        })
+        .catch(() => {})
+    })
+    queue.start()
+
+    const tracingHooks = createTracingHooks(btClient, input, config, fileLogger ?? undefined, queue)
     Object.assign(hooks, tracingHooks)
 
     // Log what hooks we're returning

@@ -12,6 +12,7 @@ export interface BraintrustConfig {
   debug: boolean
   logToFile?: string // Path to write NDJSON log of all plugin I/O, or "auto" for default path
   additionalMetadata?: Record<string, unknown>
+  queueSize?: number
 }
 
 /**
@@ -28,6 +29,7 @@ export interface PluginConfig {
   debug?: boolean
   log_to_file?: string // Path to write NDJSON log of all plugin I/O, or "true"/"auto" for default path
   additional_metadata?: Record<string, unknown>
+  queue_size?: number
 }
 
 export interface SpanData {
@@ -127,6 +129,9 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     if (pluginConfig.additional_metadata) {
       defaults.additionalMetadata = pluginConfig.additional_metadata
     }
+    if (pluginConfig.queue_size !== undefined) {
+      defaults.queueSize = pluginConfig.queue_size
+    }
   }
 
   // Layer 2: Apply environment variables (override opencode.json)
@@ -146,6 +151,14 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     logToFile = process.env.LOG_TO_FILE
   }
 
+  let queueSize = defaults.queueSize
+  if (process.env.BRAINTRUST_QUEUE_SIZE) {
+    const parsed = parseInt(process.env.BRAINTRUST_QUEUE_SIZE, 10)
+    if (!isNaN(parsed) && parsed > 0) {
+      queueSize = parsed
+    }
+  }
+
   return {
     apiKey: process.env.BRAINTRUST_API_KEY || defaults.apiKey,
     apiUrl: process.env.BRAINTRUST_API_URL || defaults.apiUrl,
@@ -160,6 +173,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
       : defaults.debug,
     logToFile,
     additionalMetadata,
+    queueSize,
   }
 }
 

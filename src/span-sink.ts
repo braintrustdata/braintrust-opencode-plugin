@@ -9,7 +9,7 @@ import type { SpanData } from "./client"
  */
 export interface SpanSink {
   insertSpan(span: SpanData): Promise<string | undefined>
-  getSpans(): SpanData[]
+  getSpans?(): SpanData[]
 }
 
 /**
