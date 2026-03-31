@@ -1,0 +1,117 @@
+name: Publish package
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to release from
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: publish-package-${{ github.event.inputs.branch || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Determine release metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          TAG="v${VERSION}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on origin" >&2
+            exit 1
+          fi
+
+          if npm view "${PACKAGE_NAME}@${VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${VERSION} is already published on npm" >&2
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate package
+        run: |
+          set -euo pipefail
+          bun run check
+          bun run typecheck
+          bun run test
+          bun run build
+          npm pack --dry-run
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public
+
+      - name: Create and push git tag
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+          COMMIT_SHA: ${{ steps.metadata.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}" "${COMMIT_SHA}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+          PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" \
+            --title "${PACKAGE_NAME} ${TAG}" \
+            --generate-notes
+
+      - name: Summarize release
+        env:
+          PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
+          VERSION: ${{ steps.metadata.outputs.version }}
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          {
+            echo "## Package published"
+            echo
+            echo "- Package: \`${PACKAGE_NAME}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Git tag: \`${TAG}\`"
+            echo "- npm provenance: enabled"
+          } >> "$GITHUB_STEP_SUMMARY"
