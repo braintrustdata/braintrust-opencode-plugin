@@ -110,3 +110,13 @@ Session (task span)
 │   └── ...
 └── metrics: total_turns, total_tool_calls
 ```
+
+## Releasing
+
+This package is published from GitHub Actions via `.github/workflows/publish-package.yaml` using npm trusted publishing with OIDC and npm provenance (`npm publish --provenance`).
+
+To cut a release:
+
+1. Bump `package.json` to the version you want to ship.
+2. Run the **Publish package** workflow from the branch you want to release.
+3. The workflow validates the package, publishes to npm, pushes the matching `v<version>` git tag, and creates a GitHub release.
