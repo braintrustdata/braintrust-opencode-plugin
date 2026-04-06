@@ -61,6 +61,33 @@ describe("Event to Span Transformation", () => {
     )
   })
 
+  it("stores modelID on turn metadata from chat.message hook", async () => {
+    const sessionId = "ses_turn_model"
+    const messageId = "msg_turn_model"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hello, world!", {
+          providerID: "anthropic",
+          modelID: "claude-3-haiku",
+        }),
+        textPart(sessionId, messageId, "Hi there!"),
+        messageCompleted(sessionId, messageId, {
+          tokens: { input: 10, output: 5 },
+          model: { providerID: "anthropic", modelID: "claude-3-haiku" },
+        }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    expect(tree).not.toBeNull()
+    const turn = tree?.children[0]
+    expect(turn?.name).toBe("Turn 1")
+    expect(turn?.metadata?.model).toBe("claude-3-haiku")
+  })
+
   it("session -> multiple turns", async () => {
     const sessionId = "ses_multi"
 
@@ -697,6 +724,47 @@ describe("Fail-open: chat.message with missing output", () => {
   })
 })
 
+describe("EventProcessor model serialization", () => {
+  it("stores bare modelID on turn metadata for processChatMessageRaw", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test-project" }, { clock })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: "ses_turn_model_raw",
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processChatMessageRaw(
+      "ses_turn_model_raw",
+      { parts: [{ type: "text", text: "Hello from raw hook" }] },
+      { providerID: "anthropic", modelID: "claude-3-haiku-20240307" },
+    )
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: "ses_turn_model_raw" },
+    })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    expect(tree?.children).toHaveLength(1)
+    expect(tree?.children[0]?.metadata?.model).toBe("claude-3-haiku-20240307")
+  })
+})
+
 describe("Additional metadata on root span", () => {
   it("includes additional_metadata on root span", async () => {
     const clock = new TestClock()
@@ -957,6 +1025,7 @@ describe("Log file replay", () => {
     const llm = turn?.children[0]
     expect(llm?.type).toBe("llm")
     expect(llm?.name).toBe("anthropic/claude-3-haiku-20240307")
+    expect(llm?.metadata.model).toBe("claude-3-haiku-20240307")
     expect(llm?.metrics?.prompt_tokens).toBe(10)
     expect(llm?.metrics?.completion_tokens).toBe(5)
   })
