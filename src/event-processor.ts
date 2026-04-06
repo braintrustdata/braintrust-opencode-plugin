@@ -111,10 +111,14 @@ export class EventProcessor {
     userMessage: string,
     model?: { providerID?: string; modelID?: string },
   ): Promise<void> {
-    const state = this.sessionStates.get(sessionID)
+    let state = this.sessionStates.get(sessionID)
     if (!state) {
-      this.log("No state found for session", { sessionID })
-      return
+      // session.created is not delivered to plugins for API-created sessions.
+      // Initialize state lazily so API-created sessions are traced correctly.
+      this.log("No state found for session, initializing lazily (API-created session)", {
+        sessionID,
+      })
+      state = await this.initSessionStateLazily(sessionID)
     }
 
     // Finalize previous turn if exists
@@ -181,6 +185,57 @@ export class EventProcessor {
         .join("\n") || ""
 
     return this.processChatMessage(sessionID, userMessage, model)
+  }
+
+  /**
+   * Lazily initialize session state and emit a root span for API-created sessions.
+   * Called from processChatMessage when no state exists for a session — this happens
+   * because OpenCode does not deliver session.created to plugins for sessions created
+   * via the HTTP API (POST /sessions).
+   */
+  private async initSessionStateLazily(sessionID: string): Promise<SessionState> {
+    const rootSpanId = generateUUID()
+    const now = this.clock.now()
+    const state: SessionState = {
+      rootSpanId,
+      effectiveRootSpanId: rootSpanId,
+      turnNumber: 0,
+      toolCallCount: 0,
+      startTime: now,
+      llmOutputParts: new Map(),
+      llmToolCalls: new Map(),
+      llmReasoningParts: new Map(),
+      processedLlmMessages: new Set(),
+      toolStartTimes: new Map(),
+      toolCallMessageIds: new Map(),
+      toolCallArgs: new Map(),
+      toolCallOutputs: new Map(),
+    }
+    this.sessionStates.set(sessionID, state)
+
+    const root_span: SpanData = {
+      id: rootSpanId,
+      span_id: rootSpanId,
+      root_span_id: rootSpanId,
+      created: new Date(now).toISOString(),
+      metadata: {
+        ...this.config.additionalMetadata,
+        session_id: sessionID,
+        workspace: this.config.worktree,
+        directory: this.config.directory,
+      },
+      metrics: {
+        start: now,
+      },
+      span_attributes: {
+        name: `OpenCode: ${this.config.projectName}`,
+        type: "task",
+      },
+    }
+
+    await this.spanSink.insertSpan(root_span)
+    this.log("Created root span via lazy init", { rootSpanId, sessionID })
+    return state
   }
 
   /**
@@ -352,6 +407,17 @@ export class EventProcessor {
     }
 
     const sessionKey = String(sessionID)
+
+    // Guard: skip if state already exists (lazy-initialized when chat.message arrived
+    // before session.created for API-created sessions).
+    if (this.sessionStates.has(sessionKey)) {
+      this.log(
+        "Session state already exists (lazy-initialized), skipping session.created init",
+        { sessionKey },
+      )
+      return
+    }
+
     const rootSpanId = generateUUID()
     const state: SessionState = {
       rootSpanId,

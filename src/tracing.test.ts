@@ -533,6 +533,162 @@ describe("Reasoning/Thinking Content", () => {
   })
 })
 
+describe("API-created sessions (lazy init)", () => {
+  it("session without session.created still produces a complete trace", async () => {
+    const sessionId = "ses_api_1"
+    const messageId = "msg_api_1"
+
+    // No sessionCreated event — simulates an API-created session
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        chatMessage("Hello from API session"),
+        textPart(sessionId, messageId, "Hi there!"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                metrics: { prompt_tokens: 10, completion_tokens: 5, tokens: 15 },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
+  it("session without session.created supports multiple turns", async () => {
+    const sessionId = "ses_api_multi"
+
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        chatMessage("First message"),
+        textPart(sessionId, "msg_1", "First response"),
+        messageCompleted(sessionId, "msg_1", { tokens: { input: 5, output: 3 } }),
+        sessionIdle(sessionId),
+        chatMessage("Second message"),
+        textPart(sessionId, "msg_2", "Second response"),
+        messageCompleted(sessionId, "msg_2", { tokens: { input: 8, output: 4 } }),
+        sessionIdle(sessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                metrics: { prompt_tokens: 5, completion_tokens: 3 },
+              },
+            ],
+          },
+          {
+            span_attributes: { name: "Turn 2", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                metrics: { prompt_tokens: 8, completion_tokens: 4 },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
+  it("session without session.created supports tool calls", async () => {
+    const sessionId = "ses_api_tool"
+    const messageId = "msg_api_tool"
+
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        chatMessage("Read a file"),
+        toolCallPart(sessionId, messageId, "call_1", "read", { filePath: "/config.ts" }),
+        toolExecute("call_1", "read", "/config.ts", { filePath: "/config.ts" }, "file contents"),
+        textPart(sessionId, messageId, "I read the file."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 15, output: 8 } }),
+        sessionIdle(sessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              { span_attributes: { name: "read: config.ts", type: "tool" } },
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                metrics: { prompt_tokens: 15, completion_tokens: 8 },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
+  it("session.created after lazy init is idempotent (no duplicate root spans)", async () => {
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test-project" }, { clock })
+
+    const sessionId = "ses_api_idempotent"
+
+    // chat.message fires first (API-created session — no session.created yet)
+    clock.tick()
+    await processor.processChatMessage(sessionId, "Hello", {
+      providerID: "anthropic",
+      modelID: "claude-3-haiku",
+    })
+
+    // session.created fires late (should be a no-op — state already exists)
+    clock.tick()
+    await processor.processEvent({
+      type: "session.created",
+      properties: {
+        info: {
+          id: sessionId,
+          projectID: "test-project",
+          directory: "/test",
+          version: "1.0.0",
+          title: "Test",
+          time: { created: Date.now(), updated: Date.now() },
+        },
+      },
+    })
+
+    clock.tick()
+    await processor.processEvent({
+      type: "session.idle",
+      properties: { sessionID: sessionId },
+    })
+
+    const spans = collector.getSpans()
+    const { spansToTree } = await import("./span-sink")
+    const tree = spansToTree(spans)
+
+    // Root span should exist and have exactly one child turn (no duplicate root spans)
+    expect(tree).not.toBeNull()
+    expect(tree?.name).toBe("OpenCode: test-project")
+    expect(tree?.children.length).toBe(1)
+    expect(tree?.children[0]?.name).toBe("Turn 1")
+
+    // Verify there is only one root span (no duplicate from session.created)
+    const rootSpans = spans.filter((s) => !s._is_merge && !s.span_parents?.length)
+    expect(rootSpans.length).toBe(1)
+  })
+})
+
 describe("Fail-open: missing or non-string tool output", () => {
   it("tool with undefined output creates span without crashing", async () => {
     const sessionId = "ses_undef_output"
