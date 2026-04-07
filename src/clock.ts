@@ -4,12 +4,20 @@
  * This allows injecting a test clock for deterministic testing
  */
 
+/** Convert a millisecond timestamp to Unix seconds */
+export function msToSeconds(ms: number): number {
+  return ms / 1000
+}
+
 /**
  * Interface for getting the current time
  */
 export interface Clock {
   /** Get the current timestamp in milliseconds */
   now(): number
+
+  /** Get the current timestamp in Unix seconds */
+  nowSeconds(): number
 }
 
 /**
@@ -18,6 +26,10 @@ export interface Clock {
 export class WallClock implements Clock {
   now(): number {
     return Date.now()
+  }
+
+  nowSeconds(): number {
+    return msToSeconds(this.now())
   }
 }
 
@@ -33,6 +45,10 @@ export class TestClock implements Clock {
 
   now(): number {
     return this.currentTime
+  }
+
+  nowSeconds(): number {
+    return msToSeconds(this.currentTime)
   }
 
   /**

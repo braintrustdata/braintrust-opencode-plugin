@@ -7,10 +7,11 @@
  *     - Tool calls (tool spans)
  */
 
+import * as os from "node:os"
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { BraintrustConfig, SpanData } from "./client"
-import { wallClock } from "./clock"
+import { msToSeconds, wallClock } from "./clock"
 import { extractToolOutput } from "./event-processor"
 import type { FileLogger } from "./file-logger"
 import type { SpanQueue } from "./span-queue"
@@ -70,6 +71,13 @@ export function createTracingHooks(
   const debug = config.debug
 
   const log = (msg: string, data?: unknown) => {
+    const extra =
+      data === undefined
+        ? undefined
+        : typeof data === "object" && data !== null && !Array.isArray(data)
+          ? (data as Record<string, unknown>)
+          : { value: data }
+
     // Only log to OpenCode's structured logging (never stdout)
     client.app
       .log({
@@ -77,7 +85,7 @@ export function createTracingHooks(
           service: "braintrust-trace",
           level: debug ? "info" : "debug",
           message: msg,
-          extra: data ? data : undefined,
+          extra,
         },
       })
       .catch(() => {})
@@ -213,7 +221,7 @@ export function createTracingHooks(
                   is_subagent: true,
                 },
                 metrics: {
-                  start: childState.startTime,
+                  start: msToSeconds(childState.startTime),
                 },
                 span_attributes: {
                   name: subagentTitle,
@@ -278,7 +286,7 @@ export function createTracingHooks(
               os: getOS(),
             },
             metrics: {
-              start: state.startTime,
+              start: msToSeconds(state.startTime),
             },
             span_attributes: {
               name: `OpenCode: ${getProjectName(input.worktree)}`,
@@ -500,8 +508,8 @@ export function createTracingHooks(
             output: llmOutput,
             error: llmErrorString,
             metrics: {
-              start: time.created as number,
-              end: time.completed as number,
+              start: msToSeconds(time.created as number),
+              end: msToSeconds(time.completed as number),
               prompt_tokens: inputTokens,
               completion_tokens: outputTokens,
               tokens: totalTokens,
@@ -542,7 +550,7 @@ export function createTracingHooks(
           const state = sessionStates.get(sessionKey)
 
           if (state) {
-            const now = wallClock.now()
+            const now = wallClock.nowSeconds()
             const isChildSession = !!state.parentSessionId
 
             // Close current turn span if exists
@@ -615,7 +623,7 @@ export function createTracingHooks(
           if (state) {
             log("Closing session span on delete", { sessionKey })
 
-            const now = wallClock.now()
+            const now = wallClock.nowSeconds()
 
             // Close current turn span if exists using merge
             if (state.currentTurnSpanId) {
@@ -669,7 +677,7 @@ export function createTracingHooks(
           const state = sessionStates.get(sessionKey)
 
           if (state) {
-            const now = wallClock.now()
+            const now = wallClock.nowSeconds()
 
             // Extract error info from event.properties
             // Error structure: { name: "ErrorType", data: { message?: string, ... } }
@@ -761,7 +769,7 @@ export function createTracingHooks(
             root_span_id: state.effectiveRootSpanId,
             output: state.currentOutput || undefined,
             metrics: {
-              end: wallClock.now(),
+              end: wallClock.nowSeconds(),
             },
             _is_merge: true,
           }
@@ -782,6 +790,7 @@ export function createTracingHooks(
 
         state.currentInput = userMessage
         const now = wallClock.now()
+        const nowSeconds = msToSeconds(now)
         state.currentTurnStartTime = now
         log("User message extracted", {
           userMessage,
@@ -806,7 +815,7 @@ export function createTracingHooks(
                 : String(messageInput.model || ""),
           },
           metrics: {
-            start: now,
+            start: nowSeconds,
           },
           span_attributes: {
             name: `Turn ${state.turnNumber}`,
@@ -844,7 +853,7 @@ export function createTracingHooks(
         // Store start time and args for this tool call
         const state = sessionStates.get(sessionID)
         if (state) {
-          state.toolStartTimes.set(callID, wallClock.now())
+          state.toolStartTimes.set(callID, wallClock.nowSeconds())
           if (output?.args !== undefined) {
             state.toolCallArgs.set(callID, output.args)
           }
@@ -878,7 +887,7 @@ export function createTracingHooks(
         })
 
         const state = sessionStates.get(sessionID)
-        if (!state || !state.currentTurnSpanId) {
+        if (!state?.currentTurnSpanId) {
           log("No state or turn for tool", { sessionID })
           return
         }
@@ -904,7 +913,7 @@ export function createTracingHooks(
 
         // Create tool span
         const toolSpanId = generateUUID()
-        const endTime = wallClock.now()
+        const endTime = wallClock.nowSeconds()
         // Prefer output captured from message.part.updated, fall back to result.output.
         // MCP tools return { content: [...] } instead of a plain output value.
         const rawOutput =
@@ -984,8 +993,7 @@ function formatToolName(tool: string, title?: string): string {
  */
 function getHostname(): string {
   try {
-    // Use Bun's API instead of Node's os module
-    return Bun.hostname || process.env.HOSTNAME || "unknown"
+    return os.hostname() || process.env.HOSTNAME || "unknown"
   } catch {
     return "unknown"
   }

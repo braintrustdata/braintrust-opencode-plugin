@@ -22,6 +22,7 @@ import {
   reasoningPart,
   session,
   sessionCreated,
+  sessionDeleted,
   sessionError,
   sessionIdle,
   textPart,
@@ -29,6 +30,13 @@ import {
   toolCallPart,
   toolExecute,
 } from "./test-helpers"
+import { createTracingHooks } from "./tracing"
+
+function expectUnixSecondsTimestamp(value: number | undefined): void {
+  expect(value).toBeDefined()
+  expect(value!).toBeGreaterThan(1_000_000_000)
+  expect(value!).toBeLessThan(10_000_000_000)
+}
 
 describe("Event to Span Transformation", () => {
   it("session -> turn -> llm", async () => {
@@ -225,6 +233,126 @@ describe("Event to Span Transformation", () => {
         ],
       },
     )
+  })
+})
+
+describe("Metric timestamps use Unix seconds", () => {
+  it("converts EventProcessor span metrics from milliseconds to seconds", async () => {
+    const sessionId = "ses_seconds"
+    const messageId = "msg_seconds"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Read the config"),
+        toolCallPart(sessionId, messageId, "call_seconds", "read", { filePath: "/config.ts" }),
+        toolExecute(
+          "call_seconds",
+          "read",
+          "/config.ts",
+          { filePath: "/config.ts" },
+          "export const debug = true",
+        ),
+        textPart(sessionId, messageId, "Done."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+        sessionDeleted(sessionId),
+      ),
+    )
+
+    expect(tree).not.toBeNull()
+    const turn = tree?.children[0]
+    const toolSpan = turn?.children.find((c) => c.type === "tool")
+    const llmSpan = turn?.children.find((c) => c.type === "llm")
+
+    expectUnixSecondsTimestamp(tree?.metrics?.start)
+    expectUnixSecondsTimestamp(tree?.metrics?.end)
+    expectUnixSecondsTimestamp(turn?.metrics?.start)
+    expectUnixSecondsTimestamp(turn?.metrics?.end)
+    expectUnixSecondsTimestamp(toolSpan?.metrics?.start)
+    expectUnixSecondsTimestamp(toolSpan?.metrics?.end)
+    expectUnixSecondsTimestamp(llmSpan?.metrics?.start)
+    expectUnixSecondsTimestamp(llmSpan?.metrics?.end)
+  })
+
+  it("converts createTracingHooks span metrics from milliseconds to seconds", async () => {
+    const sessionId = "ses_hooks_seconds"
+    const messageId = "msg_hooks_seconds"
+    const collector = new TestSpanCollector()
+    const hooks = createTracingHooks(
+      collector,
+      {
+        client: {
+          app: {
+            log: async () => undefined,
+          },
+        },
+        worktree: "/tmp/test-project",
+        directory: "/tmp/test-project",
+      } as any,
+      {
+        apiKey: "",
+        apiUrl: "https://api.braintrust.dev",
+        appUrl: "https://www.braintrust.dev",
+        projectName: "test-project",
+        tracingEnabled: true,
+        debug: false,
+      },
+    )
+
+    const eventHook = hooks.event as (args: { event: unknown }) => Promise<void>
+    const chatMessageHook = hooks["chat.message"] as (
+      input: unknown,
+      output: unknown,
+    ) => Promise<void>
+    const toolBeforeHook = hooks["tool.execute.before"] as (
+      input: unknown,
+      output: unknown,
+    ) => Promise<void>
+    const toolAfterHook = hooks["tool.execute.after"] as (
+      input: unknown,
+      output: unknown,
+    ) => Promise<void>
+
+    await eventHook({ event: sessionCreated(sessionId) })
+    await chatMessageHook(
+      {
+        sessionID: sessionId,
+        agent: "assistant",
+        model: { providerID: "anthropic", modelID: "claude-3-haiku" },
+      },
+      { parts: [{ type: "text", text: "Read the config" }] },
+    )
+    await toolBeforeHook(
+      { tool: "read", sessionID: sessionId, callID: "call_hooks_seconds" },
+      { args: { filePath: "/config.ts" } },
+    )
+    await toolAfterHook(
+      { tool: "read", sessionID: sessionId, callID: "call_hooks_seconds" },
+      { output: "export const debug = true", title: "/config.ts", metadata: {} },
+    )
+    await eventHook({ event: textPart(sessionId, messageId, "Done.") })
+    await eventHook({
+      event: messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+    })
+    await eventHook({ event: sessionIdle(sessionId) })
+    await eventHook({ event: sessionDeleted(sessionId) })
+
+    const tree = spansToTree(collector.getSpans())
+    expect(tree).not.toBeNull()
+    const turn = tree?.children[0]
+    const toolSpan = turn?.children.find((c) => c.type === "tool")
+    const llmSpan = turn?.children.find((c) => c.type === "llm")
+
+    expectUnixSecondsTimestamp(tree?.metrics?.start)
+    expectUnixSecondsTimestamp(tree?.metrics?.end)
+    expectUnixSecondsTimestamp(turn?.metrics?.start)
+    expectUnixSecondsTimestamp(turn?.metrics?.end)
+    expectUnixSecondsTimestamp(toolSpan?.metrics?.start)
+    expectUnixSecondsTimestamp(toolSpan?.metrics?.end)
+    expectUnixSecondsTimestamp(llmSpan?.metrics?.start)
+    expectUnixSecondsTimestamp(llmSpan?.metrics?.end)
   })
 })
 

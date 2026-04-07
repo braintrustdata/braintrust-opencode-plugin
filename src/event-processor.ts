@@ -8,7 +8,7 @@
 import type { Event } from "@opencode-ai/sdk"
 import type { SpanData } from "./client"
 import type { Clock } from "./clock"
-import { wallClock } from "./clock"
+import { msToSeconds, wallClock } from "./clock"
 import type { SpanSink } from "./span-sink"
 
 // Generate a UUID
@@ -125,7 +125,7 @@ export class EventProcessor {
         root_span_id: state.effectiveRootSpanId,
         output: state.currentOutput || undefined,
         metrics: {
-          end: this.clock.now(),
+          end: this.clock.nowSeconds(),
         },
         _is_merge: true,
       }
@@ -139,6 +139,7 @@ export class EventProcessor {
     state.currentInput = userMessage
 
     const now = this.clock.now()
+    const nowSeconds = msToSeconds(now)
     state.currentTurnStartTime = now
 
     const turnSpan: SpanData = {
@@ -153,7 +154,7 @@ export class EventProcessor {
         model: model ? `${model.providerID}/${model.modelID}` : undefined,
       },
       metrics: {
-        start: now,
+        start: nowSeconds,
       },
       span_attributes: {
         name: `Turn ${state.turnNumber}`,
@@ -189,7 +190,7 @@ export class EventProcessor {
   async processToolExecuteBefore(sessionID: string, callID: string, args?: unknown): Promise<void> {
     const state = this.sessionStates.get(sessionID)
     if (state) {
-      state.toolStartTimes.set(callID, this.clock.now())
+      state.toolStartTimes.set(callID, this.clock.nowSeconds())
       if (args !== undefined) {
         state.toolCallArgs.set(callID, args)
       }
@@ -208,7 +209,7 @@ export class EventProcessor {
     metadata: unknown,
   ): Promise<void> {
     const state = this.sessionStates.get(sessionID)
-    if (!state || !state.currentTurnSpanId) {
+    if (!state?.currentTurnSpanId) {
       this.log("No state or turn for tool", { sessionID })
       return
     }
@@ -232,7 +233,7 @@ export class EventProcessor {
     state.toolCallMessageIds.delete(callID)
 
     const toolSpanId = generateUUID()
-    const endTime = this.clock.now()
+    const endTime = this.clock.nowSeconds()
     // Prefer output captured from message.part.updated, fall back to hook output param.
     // MCP tools return { content: [{ type: "text", text: "..." }] } instead of a plain
     // output value, so extract the text from content[] as a last resort.
@@ -331,7 +332,7 @@ export class EventProcessor {
             is_subagent: true,
           },
           metrics: {
-            start: childState.startTime,
+            start: msToSeconds(childState.startTime),
           },
           span_attributes: {
             name: subagentTitle,
@@ -382,7 +383,7 @@ export class EventProcessor {
         directory: this.config.directory,
       },
       metrics: {
-        start: state.startTime,
+        start: msToSeconds(state.startTime),
       },
       span_attributes: {
         name: `OpenCode: ${this.config.projectName}`,
@@ -573,8 +574,8 @@ export class EventProcessor {
       input: llmInput.length > 0 ? llmInput : undefined,
       output: llmOutput,
       metrics: {
-        start: time.created as number,
-        end: time.completed as number,
+        start: msToSeconds(time.created as number),
+        end: msToSeconds(time.completed as number),
         prompt_tokens: inputTokens,
         completion_tokens: outputTokens,
         tokens: totalTokens,
@@ -605,7 +606,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = this.clock.now()
+      const now = this.clock.nowSeconds()
       const isChildSession = !!state.parentSessionId
 
       // Close current turn span if exists
@@ -668,7 +669,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = this.clock.now()
+      const now = this.clock.nowSeconds()
 
       // Close current turn span if exists
       if (state.currentTurnSpanId) {
@@ -716,7 +717,7 @@ export class EventProcessor {
     const state = this.sessionStates.get(sessionKey)
 
     if (state) {
-      const now = this.clock.now()
+      const now = this.clock.nowSeconds()
 
       // Extract error info from event.properties
       // Error structure: { name: "ErrorType", data: { message?: string, ... } }
