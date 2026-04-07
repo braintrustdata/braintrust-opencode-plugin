@@ -151,7 +151,7 @@ export class EventProcessor {
       input: userMessage || undefined,
       metadata: {
         turn_number: state.turnNumber,
-        model: model ? `${model.providerID}/${model.modelID}` : undefined,
+        model: model ? model.modelID : undefined,
       },
       metrics: {
         start: nowSeconds,
@@ -582,7 +582,7 @@ export class EventProcessor {
         reasoning_tokens: reasoningTokens || undefined,
       },
       metadata: {
-        model: modelName,
+        model: modelID,
         provider: providerID,
         message_id: messageId,
       },

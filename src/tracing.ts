@@ -516,7 +516,7 @@ export function createTracingHooks(
               reasoning_tokens: reasoningTokens || undefined,
             },
             metadata: {
-              model: modelName,
+              model: modelID,
               provider: providerID,
               message_id: messageId,
             },
@@ -811,7 +811,7 @@ export function createTracingHooks(
             // Flatten model object to string since Braintrust expects string values
             model:
               typeof messageInput.model === "object" && messageInput.model
-                ? `${(messageInput.model as { providerID?: string }).providerID}/${(messageInput.model as { modelID?: string }).modelID}`
+                ? `${(messageInput.model as { modelID?: string }).modelID}`
                 : String(messageInput.model || ""),
           },
           metrics: {
