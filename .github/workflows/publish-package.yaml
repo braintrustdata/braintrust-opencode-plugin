@@ -76,7 +76,7 @@ jobs:
           npm pack --dry-run
 
       - name: Publish to npm with provenance
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
       - name: Create and push git tag
         env:
