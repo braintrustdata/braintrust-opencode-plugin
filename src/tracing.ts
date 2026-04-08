@@ -252,6 +252,15 @@ export function createTracingHooks(
 
           const sessionKey = String(sessionID)
 
+          // Guard: skip if state already exists (lazy-initialized when chat.message arrived
+          // before session.created for API-created sessions).
+          if (sessionStates.has(sessionKey)) {
+            log("Session state already exists (lazy-initialized), skipping session.created init", {
+              sessionKey,
+            })
+            return
+          }
+
           // Create root span for session
           const rootSpanId = generateUUID()
           const state: SessionState = {
@@ -755,10 +764,54 @@ export function createTracingHooks(
         const { sessionID } = messageInput
         log("Chat message", { sessionID, parts: output?.parts })
 
-        const state = sessionStates.get(sessionID)
+        let state = sessionStates.get(sessionID)
         if (!state) {
-          log("No state found for session", { sessionID })
-          return
+          // session.created is not delivered to plugins for API-created sessions.
+          // Initialize state lazily so API-created sessions are traced correctly.
+          log("No state found for session, initializing lazily (API-created session)", { sessionID })
+          const rootSpanId = generateUUID()
+          const now = wallClock.now()
+          state = {
+            rootSpanId,
+            effectiveRootSpanId: rootSpanId,
+            turnNumber: 0,
+            toolCallCount: 0,
+            startTime: now,
+            llmOutputParts: new Map(),
+            llmToolCalls: new Map(),
+            llmReasoningParts: new Map(),
+            processedLlmMessages: new Set(),
+            toolStartTimes: new Map(),
+            toolCallMessageIds: new Map(),
+            toolCallArgs: new Map(),
+            toolCallOutputs: new Map(),
+          }
+          sessionStates.set(sessionID, state)
+
+          const root_span: SpanData = {
+            id: rootSpanId,
+            span_id: rootSpanId,
+            root_span_id: rootSpanId,
+            created: new Date(now).toISOString(),
+            metadata: {
+              ...config.additionalMetadata,
+              session_id: sessionID,
+              workspace: input.worktree,
+              directory: input.directory,
+              hostname: getHostname(),
+              username: getUsername(),
+              os: getOS(),
+            },
+            metrics: {
+              start: now,
+            },
+            span_attributes: {
+              name: `OpenCode: ${getProjectName(input.worktree)}`,
+              type: "task",
+            },
+          }
+          enqueue(root_span)
+          log("Created root span via lazy init", { rootSpanId, sessionID })
         }
 
         // Finalize previous turn if exists (using merge to only update end time)
