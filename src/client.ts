@@ -154,7 +154,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
   let queueSize = defaults.queueSize
   if (process.env.BRAINTRUST_QUEUE_SIZE) {
     const parsed = parseInt(process.env.BRAINTRUST_QUEUE_SIZE, 10)
-    if (!isNaN(parsed) && parsed > 0) {
+    if (!Number.isNaN(parsed) && parsed > 0) {
       queueSize = parsed
     }
   }

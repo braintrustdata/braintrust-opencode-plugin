@@ -768,7 +768,9 @@ export function createTracingHooks(
         if (!state) {
           // session.created is not delivered to plugins for API-created sessions.
           // Initialize state lazily so API-created sessions are traced correctly.
-          log("No state found for session, initializing lazily (API-created session)", { sessionID })
+          log("No state found for session, initializing lazily (API-created session)", {
+            sessionID,
+          })
           const rootSpanId = generateUUID()
           const now = wallClock.now()
           state = {
