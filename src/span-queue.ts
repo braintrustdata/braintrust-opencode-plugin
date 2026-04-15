@@ -20,6 +20,7 @@ export class SpanQueue {
   private sink: SpanSink
   private log: LogFn
   private running = false
+  // biome-ignore lint/correctness/noUnusedPrivateClassMembers: intentionally held to prevent GC of background worker promise
   private workerPromise: Promise<void> | null = null
   // Notify the worker that a new item is available
   private notify: (() => void) | null = null

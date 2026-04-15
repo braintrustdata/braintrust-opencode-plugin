@@ -412,10 +412,9 @@ export class EventProcessor {
     // Guard: skip if state already exists (lazy-initialized when chat.message arrived
     // before session.created for API-created sessions).
     if (this.sessionStates.has(sessionKey)) {
-      this.log(
-        "Session state already exists (lazy-initialized), skipping session.created init",
-        { sessionKey },
-      )
+      this.log("Session state already exists (lazy-initialized), skipping session.created init", {
+        sessionKey,
+      })
       return
     }
 
