@@ -21,6 +21,8 @@ export type LogKind =
   | "event" // raw OpenCode event received by the event hook
   | "chat.message.input" // messageInput arg to chat.message hook
   | "chat.message.output" // output arg to chat.message hook
+  | "chat.system.input" // input arg to experimental.chat.system.transform
+  | "chat.system.output" // output arg to experimental.chat.system.transform
   | "tool.before.input" // toolInput arg to tool.execute.before
   | "tool.before.output" // output arg to tool.execute.before
   | "tool.after.input" // toolInput arg to tool.execute.after
@@ -115,6 +117,18 @@ export class FileLogger {
   logChatMessage(messageInput: unknown, output: unknown, sessionId?: string): void {
     this.write("chat.message.input", messageInput, { hook: "chat.message", session_id: sessionId })
     this.write("chat.message.output", output, { hook: "chat.message", session_id: sessionId })
+  }
+
+  /** Convenience: log an experimental.chat.system.transform hook input + output pair */
+  logChatSystem(input: unknown, output: unknown, sessionId?: string): void {
+    this.write("chat.system.input", input, {
+      hook: "experimental.chat.system.transform",
+      session_id: sessionId,
+    })
+    this.write("chat.system.output", output, {
+      hook: "experimental.chat.system.transform",
+      session_id: sessionId,
+    })
   }
 
   /** Convenience: log a tool.execute.before hook args */

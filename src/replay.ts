@@ -38,6 +38,14 @@ interface RawChatMessageOutput {
   parts?: Array<{ type: string; text?: string }>
 }
 
+interface RawChatSystemInput {
+  sessionID?: string
+}
+
+interface RawChatSystemOutput {
+  system?: string[]
+}
+
 interface RawToolInput {
   tool?: string
   sessionID?: string
@@ -108,6 +116,7 @@ export async function replayLogFile(
     sessionID: string
     model?: { providerID?: string; modelID?: string }
   } | null = null
+  let pendingChatSystemSessionID: string | null = null
   let pendingToolBeforeInput: RawToolInput | null = null
   let pendingToolAfterInput: RawToolInput | null = null
 
@@ -139,6 +148,23 @@ export async function replayLogFile(
         pendingChatInput = null
         const output = record.data as RawChatMessageOutput
         await processor.processChatMessageRaw(sessionID, output, model)
+        break
+      }
+
+      case "chat.system.input": {
+        const input = record.data as RawChatSystemInput
+        pendingChatSystemSessionID = input.sessionID ?? record.session_id ?? null
+        break
+      }
+
+      case "chat.system.output": {
+        const sessionID = pendingChatSystemSessionID
+        pendingChatSystemSessionID = null
+        if (!sessionID) break
+        const output = record.data as RawChatSystemOutput
+        if (Array.isArray(output.system) && output.system.length > 0) {
+          await processor.processSystemTransform(sessionID, output.system)
+        }
         break
       }
 

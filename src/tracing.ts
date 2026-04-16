@@ -34,6 +34,8 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  // Joined system prompt captured from experimental.chat.system.transform
+  systemPrompt?: string
   // Parent-child session tracking (for subagents)
   parentSessionId?: string // If this is a child session, the parent's session ID
   parentRootSpanId?: string // The parent's root span ID (child spans link to this as root)
@@ -500,6 +502,9 @@ export function createTracingHooks(
           // Build output as single-element array with the assistant response
           // This is the format Braintrust's LLM view expects
           const llmInput: Array<Record<string, unknown>> = []
+          if (state.systemPrompt) {
+            llmInput.push({ role: "system", content: state.systemPrompt })
+          }
           if (state.currentInput) {
             llmInput.push({ role: "user", content: state.currentInput })
           }
@@ -892,6 +897,37 @@ export function createTracingHooks(
               service: "braintrust-trace",
               level: "error",
               message: `chat.message hook error: ${error}`,
+            },
+          })
+          .catch(() => {})
+      }
+    },
+
+    // Capture the resolved system prompt (AGENTS.md / CLAUDE.md content).
+    // OpenCode fires this before each LLM call; we join parts with \n\n and
+    // prepend them to the LLM span input so traces show the real instructions.
+    "experimental.chat.system.transform": async (hookInput, hookOutput) => {
+      fileLogger?.logChatSystem(hookInput, hookOutput, hookInput.sessionID)
+      try {
+        const { sessionID } = hookInput
+        const { system } = hookOutput
+        const state = sessionStates.get(sessionID)
+        if (state && Array.isArray(system) && system.length > 0) {
+          state.systemPrompt = system.join("\n\n")
+          log("Captured system prompt", {
+            sessionID,
+            parts: system.length,
+            length: state.systemPrompt.length,
+          })
+        }
+      } catch (error) {
+        log("Error in experimental.chat.system.transform hook", { error: String(error) })
+        client.app
+          .log({
+            body: {
+              service: "braintrust-trace",
+              level: "error",
+              message: `experimental.chat.system.transform hook error: ${error}`,
             },
           })
           .catch(() => {})
