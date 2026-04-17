@@ -52,6 +52,11 @@ export type TestItem =
       input: Record<string, unknown>
       output: string | undefined | unknown
     }
+  | {
+      _hook: "experimental.chat.system.transform"
+      system: string[]
+      sessionID?: string // Optional: target session (defaults to main session)
+    }
 
 export interface TestToolCall {
   id: string
@@ -338,6 +343,14 @@ export function toolExecute(
 }
 
 /**
+ * experimental.chat.system.transform hook call (not an event).
+ * Carries the resolved system prompt parts that OpenCode passes to the LLM.
+ */
+export function systemTransform(system: string[], options?: { sessionID?: string }): TestItem {
+  return { _hook: "experimental.chat.system.transform", system, sessionID: options?.sessionID }
+}
+
+/**
  * Helper to build a tool call object for use with toolCallPart
  */
 export function toolCall(id: string, tool: string, args: Record<string, unknown>): TestToolCall {
@@ -389,6 +402,11 @@ type HookItem =
       title: string
       input: Record<string, unknown>
       output: string | undefined | unknown
+    }
+  | {
+      _hook: "experimental.chat.system.transform"
+      system: string[]
+      sessionID?: string
     }
 
 function isHook(item: TestItem): item is HookItem {
@@ -446,6 +464,14 @@ export async function eventsToTree(
           hook.output,
           hook.input,
         )
+      } else if (item._hook === "experimental.chat.system.transform") {
+        const hook = item as {
+          _hook: "experimental.chat.system.transform"
+          system: string[]
+          sessionID?: string
+        }
+        const targetSessionID = hook.sessionID || sessionID
+        await processor.processSystemTransform(targetSessionID, hook.system)
       }
     } else {
       // It's a real Event - patch timestamps to use clock time for deterministic ordering

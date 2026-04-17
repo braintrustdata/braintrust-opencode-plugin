@@ -28,6 +28,8 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  // Joined system prompt captured from experimental.chat.system.transform
+  systemPrompt?: string
   // Parent-child session tracking (for subagents)
   parentSessionId?: string // If this is a child session, the parent's session ID
   parentRootSpanId?: string // The parent's root span ID (child spans link to this as root)
@@ -186,6 +188,22 @@ export class EventProcessor {
         .join("\n") || ""
 
     return this.processChatMessage(sessionID, userMessage, model)
+  }
+
+  /**
+   * Capture the system prompt from experimental.chat.system.transform.
+   * Joins the array with \n\n so the LLM span shows one system message.
+   */
+  async processSystemTransform(sessionID: string, system: string[]): Promise<void> {
+    const state = this.sessionStates.get(sessionID)
+    if (state && Array.isArray(system) && system.length > 0) {
+      state.systemPrompt = system.join("\n\n")
+      this.log("Captured system prompt", {
+        sessionID,
+        parts: system.length,
+        length: state.systemPrompt.length,
+      })
+    }
   }
 
   /**
@@ -623,6 +641,9 @@ export class EventProcessor {
 
     // Build input/output in Braintrust's expected format
     const llmInput: Array<Record<string, unknown>> = []
+    if (state.systemPrompt) {
+      llmInput.push({ role: "system", content: state.systemPrompt })
+    }
     if (state.currentInput) {
       llmInput.push({ role: "user", content: state.currentInput })
     }

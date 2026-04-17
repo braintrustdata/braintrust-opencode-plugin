@@ -25,6 +25,7 @@ import {
   sessionDeleted,
   sessionError,
   sessionIdle,
+  systemTransform,
   textPart,
   toolCallCompletedPart,
   toolCallPart,
@@ -541,6 +542,201 @@ describe("Subagents (Child Sessions)", () => {
         ],
       },
     )
+  })
+})
+
+describe("System prompt capture", () => {
+  it("prepends system message to LLM span input when hook fires before message completes", async () => {
+    const sessionId = "ses_sys_1"
+    const messageId = "msg_sys_1"
+    const systemContent = "You are a helpful coding assistant. Follow AGENTS.md rules."
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        // OpenCode fires this right before the LLM call with the resolved system prompt
+        systemTransform([systemContent]),
+        textPart(sessionId, messageId, "Hello!"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const llmSpan = tree?.children[0]?.children.find((c) => c.type === "llm")
+    expect(llmSpan).toBeDefined()
+    const input = llmSpan?.input as Array<{ role: string; content: string }>
+    expect(input).toEqual([
+      { role: "system", content: systemContent },
+      { role: "user", content: "Hi" },
+    ])
+  })
+
+  it("omits system message when the hook never fires (existing behavior preserved)", async () => {
+    const sessionId = "ses_sys_absent"
+    const messageId = "msg_sys_absent"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        // No systemTransform — e.g. an OpenCode version that does not emit it
+        textPart(sessionId, messageId, "Hello!"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const llmSpan = tree?.children[0]?.children.find((c) => c.type === "llm")
+    expect(llmSpan).toBeDefined()
+    const input = llmSpan?.input as Array<{ role: string; content: string }>
+    expect(input).toEqual([{ role: "user", content: "Hi" }])
+    // And definitely no system entry snuck in
+    expect(input.some((m) => m.role === "system")).toBe(false)
+  })
+
+  it("joins multi-part system arrays with a blank line between parts", async () => {
+    const sessionId = "ses_sys_multi"
+    const messageId = "msg_sys_multi"
+    const parts = ["Base instructions from AGENTS.md", "Additional context from CLAUDE.md"]
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        systemTransform(parts),
+        textPart(sessionId, messageId, "Hello!"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const llmSpan = tree?.children[0]?.children.find((c) => c.type === "llm")
+    const input = llmSpan?.input as Array<{ role: string; content: string }>
+    expect(input[0]?.role).toBe("system")
+    expect(input[0]?.content).toBe(parts.join("\n\n"))
+  })
+
+  it("updates system prompt across turns and reflects latest in each LLM span", async () => {
+    const sessionId = "ses_sys_turns"
+    const firstSystem = "Instructions v1"
+    const secondSystem = "Instructions v2 with new context"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        // Turn 1
+        chatMessage("First"),
+        systemTransform([firstSystem]),
+        textPart(sessionId, "msg_1", "Reply 1"),
+        messageCompleted(sessionId, "msg_1", { tokens: { input: 5, output: 3 } }),
+        sessionIdle(sessionId),
+        // Turn 2: OpenCode fires the hook again with an updated prompt
+        chatMessage("Second"),
+        systemTransform([secondSystem]),
+        textPart(sessionId, "msg_2", "Reply 2"),
+        messageCompleted(sessionId, "msg_2", { tokens: { input: 6, output: 4 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn1Llm = tree?.children[0]?.children.find((c) => c.type === "llm")
+    const turn2Llm = tree?.children[1]?.children.find((c) => c.type === "llm")
+
+    const turn1Input = turn1Llm?.input as Array<{ role: string; content: string }>
+    const turn2Input = turn2Llm?.input as Array<{ role: string; content: string }>
+
+    expect(turn1Input[0]).toEqual({ role: "system", content: firstSystem })
+    expect(turn2Input[0]).toEqual({ role: "system", content: secondSystem })
+  })
+
+  it("ignores empty system arrays and leaves the LLM span input unchanged", async () => {
+    const sessionId = "ses_sys_empty"
+    const messageId = "msg_sys_empty"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        systemTransform([]),
+        textPart(sessionId, messageId, "Hello!"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const llmSpan = tree?.children[0]?.children.find((c) => c.type === "llm")
+    const input = llmSpan?.input as Array<{ role: string; content: string }>
+    expect(input).toEqual([{ role: "user", content: "Hi" }])
+  })
+})
+
+describe("System prompt capture: production hooks", () => {
+  it("createTracingHooks captures system prompt via experimental.chat.system.transform", async () => {
+    const sessionId = "ses_hooks_sys"
+    const messageId = "msg_hooks_sys"
+    const systemContent = "System instructions from AGENTS.md"
+
+    const collector = new TestSpanCollector()
+    const hooks = createTracingHooks(
+      collector,
+      {
+        client: { app: { log: async () => undefined } },
+        worktree: "/tmp/test-project",
+        directory: "/tmp/test-project",
+      } as any,
+      {
+        apiKey: "",
+        apiUrl: "https://api.braintrust.dev",
+        appUrl: "https://www.braintrust.dev",
+        projectName: "test-project",
+        tracingEnabled: true,
+        debug: false,
+      },
+    )
+
+    const eventHook = hooks.event as (args: { event: unknown }) => Promise<void>
+    const chatMessageHook = hooks["chat.message"] as (
+      input: unknown,
+      output: unknown,
+    ) => Promise<void>
+    const systemTransformHook = hooks["experimental.chat.system.transform"] as (
+      input: unknown,
+      output: unknown,
+    ) => Promise<void>
+
+    expect(systemTransformHook).toBeDefined()
+
+    await eventHook({ event: sessionCreated(sessionId) })
+    await chatMessageHook(
+      {
+        sessionID: sessionId,
+        agent: "assistant",
+        model: { providerID: "anthropic", modelID: "claude-3-haiku" },
+      },
+      { parts: [{ type: "text", text: "Hi" }] },
+    )
+    // Plugin hook signature: (input: { sessionID }, output: { system: string[] })
+    await systemTransformHook({ sessionID: sessionId }, { system: [systemContent] })
+    await eventHook({ event: textPart(sessionId, messageId, "Hello!") })
+    await eventHook({
+      event: messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+    })
+    await eventHook({ event: sessionIdle(sessionId) })
+    await eventHook({ event: sessionDeleted(sessionId) })
+
+    const tree = spansToTree(collector.getSpans())
+    const llmSpan = tree?.children[0]?.children.find((c) => c.type === "llm")
+    const input = llmSpan?.input as Array<{ role: string; content: string }>
+    expect(input).toEqual([
+      { role: "system", content: systemContent },
+      { role: "user", content: "Hi" },
+    ])
   })
 })
 
