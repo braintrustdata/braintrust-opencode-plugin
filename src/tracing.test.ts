@@ -19,6 +19,7 @@ import {
   childSessionCreated,
   eventsToTree,
   messageCompleted,
+  messagePartDelta,
   reasoningPart,
   session,
   sessionCreated,
@@ -1667,5 +1668,226 @@ describe("MCP tool output fixture replay", () => {
     expect(toolSpan?.output).toBeDefined()
     expect(typeof toolSpan?.output).toBe("string")
     expect(toolSpan?.output as string).toContain("Getting started")
+  })
+})
+
+describe("opencode 1.14.x event stream (delta-only)", () => {
+  it("synthesizes an LLM span on session.idle from accumulated deltas", async () => {
+    const sessionId = "ses_1_14"
+    const messageId = "msg_1_14"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi", { providerID: "anthropic", modelID: "claude-sonnet-4-6" }),
+        messagePartDelta(sessionId, messageId, "Hello"),
+        messagePartDelta(sessionId, messageId, " there"),
+        messagePartDelta(sessionId, messageId, "!"),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    expect(tree).not.toBeNull()
+    expect(tree?.name).toBe("OpenCode: test-project")
+
+    const turn = tree?.children[0]
+    expect(turn?.name).toBe("Turn 1")
+
+    const llm = turn?.children.find((c) => c.type === "llm")
+    expect(llm).toBeDefined()
+    expect(llm?.name).toBe("anthropic/claude-sonnet-4-6")
+
+    const output = llm?.output as Array<{ role: string; content: string }>
+    expect(output[0].role).toBe("assistant")
+    expect(output[0].content).toBe("Hello there!")
+
+    // Tokens are intentionally omitted (not zeroed) — unrecoverable from deltas.
+    expect(llm?.metrics?.tokens).toBeUndefined()
+    expect(llm?.metrics?.prompt_tokens).toBeUndefined()
+    expect(llm?.metrics?.completion_tokens).toBeUndefined()
+
+    expect(llm?.metadata?.synthesized_from).toBe("session.idle")
+  })
+
+  it("falls back to delta buffer for the turn-span output when no message.updated arrives", async () => {
+    const sessionId = "ses_1_14_turn_output"
+    const messageId = "msg_1_14_turn_output"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Tell me a joke"),
+        messagePartDelta(sessionId, messageId, "Why did the chicken"),
+        messagePartDelta(sessionId, messageId, " cross the road?"),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn = tree?.children[0]
+    expect(turn?.output).toBe("Why did the chicken cross the road?")
+  })
+
+  it("prefers message.updated over delta synthesis when both arrive (transition case)", async () => {
+    const sessionId = "ses_transition"
+    const messageId = "msg_transition"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi", { providerID: "anthropic", modelID: "claude-sonnet-4-6" }),
+        messagePartDelta(sessionId, messageId, "Hello from deltas"),
+        // Old-style events still arrive — these should win, and the synthesized
+        // span must NOT also fire (no double-emit).
+        textPart(sessionId, messageId, "Hello from message.updated"),
+        messageCompleted(sessionId, messageId, { tokens: { input: 5, output: 3 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn = tree?.children[0]
+    const llmSpans = turn?.children.filter((c) => c.type === "llm") ?? []
+    expect(llmSpans.length).toBe(1)
+
+    // The single LLM span comes from message.updated (has token counts, no synthesized_from marker).
+    const llm = llmSpans[0]
+    expect(llm?.metrics?.tokens).toBe(8)
+    expect(llm?.metadata?.synthesized_from).toBeUndefined()
+  })
+
+  it("prepends system prompt from experimental.chat.system.transform to the synthesized LLM span", async () => {
+    const sessionId = "ses_1_14_sys"
+    const messageId = "msg_1_14_sys"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        systemTransform(["You are helpful."]),
+        chatMessage("Hi"),
+        messagePartDelta(sessionId, messageId, "Hi back"),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn = tree?.children[0]
+    const llm = turn?.children.find((c) => c.type === "llm")
+    const llmInput = llm?.input as Array<{ role: string; content: string }>
+    expect(llmInput[0]).toEqual({ role: "system", content: "You are helpful." })
+    expect(llmInput[1]).toEqual({ role: "user", content: "Hi" })
+  })
+
+  it("does not leak provider/model from the previous turn when Turn 2's chat.message has no model object", async () => {
+    // Drive the EventProcessor directly so we can pass `undefined` as the
+    // chat.message model param — the eventsToTree harness defaults it.
+    const sessionId = "ses_model_leak"
+    const clock = new TestClock()
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test" }, { clock })
+
+    clock.tick()
+    await processor.processEvent(sessionCreated(sessionId))
+
+    // Turn 1: explicit model.
+    clock.tick()
+    await processor.processChatMessage(sessionId, "Turn 1", {
+      providerID: "anthropic",
+      modelID: "claude-sonnet-4-6",
+    })
+    clock.tick()
+    await processor.processEvent(messagePartDelta(sessionId, "msg_1", "first"))
+    clock.tick()
+    await processor.processEvent(sessionIdle(sessionId))
+
+    // Turn 2: no model object — mirrors a production chat.message where
+    // messageInput.model is undefined or a non-object string.
+    clock.tick()
+    await processor.processChatMessage(sessionId, "Turn 2", undefined)
+    clock.tick()
+    await processor.processEvent(messagePartDelta(sessionId, "msg_2", "second"))
+    clock.tick()
+    await processor.processEvent(sessionIdle(sessionId))
+
+    const llmSpans = collector
+      .getSpans()
+      .filter((s) => s.span_attributes?.type === "llm" && !s._is_merge)
+    expect(llmSpans.length).toBe(2)
+
+    // Turn 2's synthesized span must NOT inherit Turn 1's model identity.
+    const turn2Span = llmSpans[1]
+    expect(turn2Span.metadata?.provider).toBe("unknown")
+    expect(turn2Span.metadata?.model).toBe("unknown")
+    expect(turn2Span.span_attributes?.name).toBe("unknown/unknown")
+  })
+
+  it("does not synthesize an LLM span when no deltas arrived (model never responded)", async () => {
+    const sessionId = "ses_no_deltas"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        // No message.part.delta events at all — model never streamed a response.
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn = tree?.children[0]
+    expect(turn?.name).toBe("Turn 1")
+    // Turn still closes, but no LLM child span — the absence is meaningful.
+    const llmSpans = turn?.children.filter((c) => c.type === "llm") ?? []
+    expect(llmSpans.length).toBe(0)
+  })
+
+  it("ignores message.part.delta events with non-text fields (e.g. tool_input)", async () => {
+    const sessionId = "ses_field_filter"
+    const messageId = "msg_field_filter"
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Hi"),
+        messagePartDelta(sessionId, messageId, "real text"),
+        // Future opencode could stream tool-call input deltas under a
+        // different field. We must NOT concatenate them into the assistant
+        // response.
+        messagePartDelta(sessionId, messageId, '{"path":"/tmp"}', { field: "tool_input" }),
+        messagePartDelta(sessionId, messageId, " more text"),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turn = tree?.children[0]
+    const llm = turn?.children.find((c) => c.type === "llm")
+    const output = llm?.output as Array<{ role: string; content: string }>
+    expect(output[0].content).toBe("real text more text")
+  })
+
+  it("preserves metrics.start when the turn began at clock time 0 (epoch)", async () => {
+    // Drive the EventProcessor with a clock starting at 0 — currentTurnStartTime
+    // becomes 0, which a `value ? msToSeconds(value) : undefined` ternary would
+    // collapse to undefined. We want the start metric preserved as 0.
+    const sessionId = "ses_epoch_zero"
+    const clock = new TestClock(0)
+    const collector = new TestSpanCollector()
+    const processor = new EventProcessor(collector, { projectName: "test" }, { clock })
+
+    await processor.processEvent(sessionCreated(sessionId))
+    await processor.processChatMessage(sessionId, "Hi", {
+      providerID: "anthropic",
+      modelID: "claude",
+    })
+    await processor.processEvent(messagePartDelta(sessionId, "msg_epoch", "hello"))
+    clock.advance(1000)
+    await processor.processEvent(sessionIdle(sessionId))
+
+    const llmSpan = collector
+      .getSpans()
+      .find((s) => s.span_attributes?.type === "llm" && !s._is_merge)
+    expect(llmSpan?.metrics?.start).toBe(0)
   })
 })

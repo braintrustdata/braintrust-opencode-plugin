@@ -9,6 +9,7 @@ import type { Event } from "@opencode-ai/sdk"
 import type { SpanData } from "./client"
 import type { Clock } from "./clock"
 import { msToSeconds, wallClock } from "./clock"
+import { buildSynthesizedLlmSpan, joinAccumulatedDeltas } from "./delta-synthesis"
 import type { SpanSink } from "./span-sink"
 
 // Generate a UUID
@@ -44,6 +45,13 @@ interface SessionState {
   >
   llmReasoningParts: Map<string, string> // messageId -> reasoning/thinking text
   processedLlmMessages: Set<string>
+  // opencode 1.14.x fallback: model captured from chat.message hook (used when
+  // message.updated is never delivered), accumulated delta text per messageID,
+  // and a per-turn guard so we don't double-emit when both event paths fire.
+  currentProviderID?: string
+  currentModelID?: string
+  llmSpanEmittedForCurrentTurn?: boolean
+  deltaAccumulatedOutput: Map<string, string>
   // Tool span tracking
   toolStartTimes: Map<string, number>
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
@@ -94,6 +102,9 @@ export class EventProcessor {
       await this.handleSessionCreated(info)
     } else if (event.type === "message.part.updated") {
       await this.handleMessagePartUpdated(props)
+    } else if ((event.type as string) === "message.part.delta") {
+      // opencode 1.14+ event, not yet in the SDK's typed Event union.
+      await this.handleMessagePartDelta(props)
     } else if (event.type === "message.updated") {
       await this.handleMessageUpdated(props)
     } else if (event.type === "session.idle") {
@@ -143,6 +154,13 @@ export class EventProcessor {
     state.currentTurnSpanId = generateUUID()
     state.currentOutput = undefined
     state.currentInput = userMessage
+    state.deltaAccumulatedOutput.clear()
+    state.llmSpanEmittedForCurrentTurn = false
+
+    // Reset unconditionally so a turn without a model object doesn't inherit
+    // the previous turn's identity in the synthesized LLM span fallback.
+    state.currentProviderID = model?.providerID
+    state.currentModelID = model?.modelID
 
     const now = this.clock.now()
     const nowSeconds = msToSeconds(now)
@@ -225,6 +243,7 @@ export class EventProcessor {
       llmToolCalls: new Map(),
       llmReasoningParts: new Map(),
       processedLlmMessages: new Set(),
+      deltaAccumulatedOutput: new Map(),
       toolStartTimes: new Map(),
       toolCallMessageIds: new Map(),
       toolCallArgs: new Map(),
@@ -385,6 +404,7 @@ export class EventProcessor {
           llmToolCalls: new Map(),
           llmReasoningParts: new Map(),
           processedLlmMessages: new Set(),
+          deltaAccumulatedOutput: new Map(),
           toolStartTimes: new Map(),
           toolCallMessageIds: new Map(),
           toolCallArgs: new Map(),
@@ -447,6 +467,7 @@ export class EventProcessor {
       llmToolCalls: new Map(),
       llmReasoningParts: new Map(),
       processedLlmMessages: new Set(),
+      deltaAccumulatedOutput: new Map(),
       toolStartTimes: new Map(),
       toolCallMessageIds: new Map(),
       toolCallArgs: new Map(),
@@ -558,6 +579,31 @@ export class EventProcessor {
         this.log("Tracking LLM reasoning part", { messageId, textLength: text.length })
       }
     }
+  }
+
+  /**
+   * Accumulate streamed deltas from opencode 1.14.x. The event payload is
+   * { sessionID, messageID, partID, field, delta }. The `field` is always
+   * "text" for both text and reasoning parts, so we cannot distinguish them
+   * here; we concatenate every delta into one buffer keyed by messageID.
+   * The synthesized LLM span on session.idle reads from this buffer.
+   */
+  private async handleMessagePartDelta(props: Record<string, unknown>): Promise<void> {
+    const sessionID = props.sessionID as string
+    const messageID = props.messageID as string
+    const field = props.field as string
+    const delta = props.delta as string
+
+    if (!sessionID || !messageID || !delta) return
+    // Only accumulate text-field deltas. Other fields (e.g., a future
+    // `tool_input` for streamed tool-call args) must not corrupt assistant text.
+    if (field !== "text") return
+
+    const state = this.sessionStates.get(sessionID)
+    if (!state) return
+
+    const prev = state.deltaAccumulatedOutput.get(messageID) ?? ""
+    state.deltaAccumulatedOutput.set(messageID, prev + delta)
   }
 
   private async handleMessageUpdated(props: Record<string, unknown>): Promise<void> {
@@ -678,8 +724,25 @@ export class EventProcessor {
       },
     }
 
+    // Set the guard BEFORE awaiting so a failed insert doesn't leave the flag
+    // false and let session.idle synthesize a duplicate span.
+    state.llmSpanEmittedForCurrentTurn = true
     await this.spanSink.insertSpan(llmSpan)
     this.log("Created LLM span", { messageId, modelName, tokens: totalTokens })
+  }
+
+  private async synthesizeLlmSpanFromDeltas(
+    state: SessionState,
+    endSeconds: number,
+  ): Promise<void> {
+    const span = buildSynthesizedLlmSpan(state, endSeconds)
+    if (!span) return
+    // Set the guard BEFORE awaiting (see handleMessageUpdated for rationale).
+    state.llmSpanEmittedForCurrentTurn = true
+    await this.spanSink.insertSpan(span)
+    this.log("Synthesized LLM span from deltas", {
+      modelName: span.span_attributes?.name,
+    })
   }
 
   private async handleSessionIdle(sessionID: string | undefined): Promise<void> {
@@ -695,13 +758,23 @@ export class EventProcessor {
       const now = this.clock.nowSeconds()
       const isChildSession = !!state.parentSessionId
 
+      // opencode 1.14.x fallback: if no message.updated landed for this turn
+      // but we accumulated streamed deltas, synthesize an LLM span before
+      // closing the turn so the trace isn't empty.
+      if (state.currentTurnSpanId && !state.llmSpanEmittedForCurrentTurn) {
+        await this.synthesizeLlmSpanFromDeltas(state, now)
+      }
+
       // Close current turn span if exists
       if (state.currentTurnSpanId) {
+        // currentOutput may still be empty when only deltas arrived; fall back to
+        // the accumulated delta buffer so the turn span shows the assistant text.
+        const fallbackOutput = state.currentOutput || joinAccumulatedDeltas(state) || undefined
         const turnSpan: SpanData = {
           id: state.currentTurnSpanId,
           span_id: state.currentTurnSpanId,
           root_span_id: state.effectiveRootSpanId,
-          output: state.currentOutput || undefined,
+          output: fallbackOutput,
           metrics: {
             end: now,
           },
@@ -712,6 +785,8 @@ export class EventProcessor {
         state.currentInput = undefined
         state.currentOutput = undefined
         state.currentTurnStartTime = undefined
+        state.deltaAccumulatedOutput.clear()
+        state.llmSpanEmittedForCurrentTurn = false
         this.log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
       }
 

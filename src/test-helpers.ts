@@ -291,6 +291,28 @@ export function toolCallCompletedPart(
 }
 
 /**
+ * Create a message.part.delta event (opencode 1.14.x event stream).
+ * Not yet in @opencode-ai/sdk's typed Event union, so we cast through unknown.
+ */
+export function messagePartDelta(
+  sessionID: string,
+  messageID: string,
+  delta: string,
+  options?: { partID?: string; field?: string },
+): Event {
+  return {
+    type: "message.part.delta",
+    properties: {
+      sessionID,
+      messageID,
+      partID: options?.partID ?? `prt_text_${messageID}`,
+      field: options?.field ?? "text",
+      delta,
+    },
+  } as unknown as Event
+}
+
+/**
  * Create message.updated event for assistant message completion
  */
 export function messageCompleted(

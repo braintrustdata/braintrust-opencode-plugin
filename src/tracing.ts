@@ -12,6 +12,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { BraintrustConfig, SpanData } from "./client"
 import { msToSeconds, wallClock } from "./clock"
+import { buildSynthesizedLlmSpan, joinAccumulatedDeltas } from "./delta-synthesis"
 import { extractToolOutput } from "./event-processor"
 import type { FileLogger } from "./file-logger"
 import type { SpanQueue } from "./span-queue"
@@ -50,6 +51,13 @@ interface SessionState {
   > // messageId -> tool_calls
   llmReasoningParts: Map<string, string> // messageId -> reasoning/thinking text
   processedLlmMessages: Set<string> // track which assistant messages we've created spans for
+  // opencode 1.14.x fallback: model captured from chat.message hook (used when
+  // message.updated is never delivered), accumulated delta text per messageID,
+  // and a per-turn guard so we don't double-emit when both event paths fire.
+  currentProviderID?: string
+  currentModelID?: string
+  llmSpanEmittedForCurrentTurn?: boolean
+  deltaAccumulatedOutput: Map<string, string>
   // Tool span tracking
   toolStartTimes: Map<string, number> // callID -> start timestamp
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
@@ -198,6 +206,7 @@ export function createTracingHooks(
                 llmToolCalls: new Map(),
                 llmReasoningParts: new Map(),
                 processedLlmMessages: new Set(),
+                deltaAccumulatedOutput: new Map(),
                 toolStartTimes: new Map(),
                 toolCallMessageIds: new Map(),
                 toolCallArgs: new Map(),
@@ -275,6 +284,7 @@ export function createTracingHooks(
             llmToolCalls: new Map(),
             llmReasoningParts: new Map(),
             processedLlmMessages: new Set(),
+            deltaAccumulatedOutput: new Map(),
             toolStartTimes: new Map(),
             toolCallMessageIds: new Map(),
             toolCallArgs: new Map(),
@@ -406,6 +416,29 @@ export function createTracingHooks(
               log("Tracking LLM reasoning part", { messageId, textLength: text.length })
             }
           }
+        }
+        // opencode 1.14.x: streamed deltas (not yet in the SDK's typed Event union).
+        // Payload: { sessionID, messageID, partID, field, delta }. The `field`
+        // is always "text" for both text and reasoning, so we accumulate
+        // everything into one buffer keyed by messageID. The session.idle
+        // handler synthesizes an LLM span from this buffer when message.updated
+        // never arrives.
+        else if ((event.type as string) === "message.part.delta") {
+          const deltaSessionID = props.sessionID as string
+          const deltaMessageID = props.messageID as string
+          const deltaField = props.field as string
+          const deltaText = props.delta as string
+
+          if (!deltaSessionID || !deltaMessageID || !deltaText) return
+          // Only accumulate text-field deltas. Other fields (e.g., a future
+          // `tool_input` for streamed tool-call args) must not corrupt assistant text.
+          if (deltaField !== "text") return
+
+          const state = sessionStates.get(deltaSessionID)
+          if (!state) return
+
+          const prev = state.deltaAccumulatedOutput.get(deltaMessageID) ?? ""
+          state.deltaAccumulatedOutput.set(deltaMessageID, prev + deltaText)
         }
         // Handle assistant message completion - create LLM span
         else if (event.type === "message.updated") {
@@ -540,6 +573,9 @@ export function createTracingHooks(
             },
           }
 
+          // Set the guard BEFORE enqueue so a failed enqueue doesn't leave the
+          // flag false and let session.idle synthesize a duplicate span.
+          state.llmSpanEmittedForCurrentTurn = true
           enqueue(llmSpan)
           log("Created LLM span", {
             messageId,
@@ -567,13 +603,30 @@ export function createTracingHooks(
             const now = wallClock.nowSeconds()
             const isChildSession = !!state.parentSessionId
 
+            // opencode 1.14.x fallback: if message.updated never landed but
+            // we accumulated streamed deltas, synthesize an LLM span before
+            // closing the turn.
+            if (state.currentTurnSpanId && !state.llmSpanEmittedForCurrentTurn) {
+              const synthSpan = buildSynthesizedLlmSpan(state, now)
+              if (synthSpan) {
+                // Set the guard BEFORE enqueue (see handleMessageUpdated rationale).
+                state.llmSpanEmittedForCurrentTurn = true
+                enqueue(synthSpan)
+                log("Synthesized LLM span from deltas", {
+                  modelName: synthSpan.span_attributes?.name,
+                })
+              }
+            }
+
             // Close current turn span if exists
             if (state.currentTurnSpanId) {
+              const fallbackOutput =
+                state.currentOutput || joinAccumulatedDeltas(state) || undefined
               log("Closing turn span on idle", {
                 sessionKey,
                 turnNumber: state.turnNumber,
                 input: state.currentInput?.substring(0, 100),
-                output: state.currentOutput?.substring(0, 100),
+                output: fallbackOutput?.substring(0, 100),
                 isChildSession,
               })
 
@@ -581,7 +634,7 @@ export function createTracingHooks(
                 id: state.currentTurnSpanId,
                 span_id: state.currentTurnSpanId,
                 root_span_id: state.effectiveRootSpanId,
-                output: state.currentOutput || undefined,
+                output: fallbackOutput,
                 metrics: {
                   end: now,
                 },
@@ -592,6 +645,8 @@ export function createTracingHooks(
               state.currentInput = undefined
               state.currentOutput = undefined
               state.currentTurnStartTime = undefined
+              state.deltaAccumulatedOutput.clear()
+              state.llmSpanEmittedForCurrentTurn = false
               log("Turn span closed", { sessionKey, turnNumber: state.turnNumber })
             }
 
@@ -788,6 +843,7 @@ export function createTracingHooks(
             llmToolCalls: new Map(),
             llmReasoningParts: new Map(),
             processedLlmMessages: new Set(),
+            deltaAccumulatedOutput: new Map(),
             toolStartTimes: new Map(),
             toolCallMessageIds: new Map(),
             toolCallArgs: new Map(),
@@ -840,6 +896,19 @@ export function createTracingHooks(
         state.turnNumber++
         state.currentTurnSpanId = generateUUID()
         state.currentOutput = undefined
+        state.deltaAccumulatedOutput.clear()
+        state.llmSpanEmittedForCurrentTurn = false
+
+        // Capture model identity for the synthesized LLM span fallback (opencode 1.14.x).
+        // The chat.message hook receives `model` as `{ providerID, modelID }` or as a string.
+        // Reset unconditionally so a turn without a model object doesn't inherit the
+        // previous turn's identity in the synthesized LLM span.
+        const modelObj =
+          typeof messageInput.model === "object" && messageInput.model
+            ? (messageInput.model as { providerID?: string; modelID?: string })
+            : undefined
+        state.currentProviderID = modelObj?.providerID
+        state.currentModelID = modelObj?.modelID
 
         // Extract user message from parts
         const userMessage =
