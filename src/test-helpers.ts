@@ -297,7 +297,12 @@ export function messageCompleted(
   sessionID: string,
   messageID: string,
   options?: {
-    tokens?: { input: number; output: number }
+    tokens?: {
+      input: number
+      output: number
+      reasoning?: number
+      cache?: { read?: number; write?: number }
+    }
     model?: { providerID: string; modelID: string }
     time?: { created: number; completed: number }
   },
@@ -317,10 +322,13 @@ export function messageCompleted(
     path: { cwd: "/test", root: "/test" },
     cost: 0.001,
     tokens: {
-      input: options?.tokens?.input || 10,
-      output: options?.tokens?.output || 5,
-      reasoning: 0,
-      cache: { read: 0, write: 0 },
+      input: options?.tokens?.input ?? 10,
+      output: options?.tokens?.output ?? 5,
+      reasoning: options?.tokens?.reasoning ?? 0,
+      cache: {
+        read: options?.tokens?.cache?.read ?? 0,
+        write: options?.tokens?.cache?.write ?? 0,
+      },
     },
   }
   return {
@@ -379,6 +387,9 @@ export interface ExpectedSpan {
     prompt_tokens?: number
     completion_tokens?: number
     tokens?: number
+    prompt_cached_tokens?: number
+    prompt_cache_creation_tokens?: number
+    reasoning_tokens?: number
   }
   metadata?: Record<string, unknown>
   children?: ExpectedSpan[]
@@ -549,6 +560,21 @@ function spanMatchesSingle(actual: SpanTree, expected: ExpectedSpan): boolean {
       return false
     if (expected.metrics.tokens !== undefined && actual.metrics?.tokens !== expected.metrics.tokens)
       return false
+    if (
+      expected.metrics.prompt_cached_tokens !== undefined &&
+      actual.metrics?.prompt_cached_tokens !== expected.metrics.prompt_cached_tokens
+    )
+      return false
+    if (
+      expected.metrics.prompt_cache_creation_tokens !== undefined &&
+      actual.metrics?.prompt_cache_creation_tokens !== expected.metrics.prompt_cache_creation_tokens
+    )
+      return false
+    if (
+      expected.metrics.reasoning_tokens !== undefined &&
+      actual.metrics?.reasoning_tokens !== expected.metrics.reasoning_tokens
+    )
+      return false
   }
 
   if (expected.input !== undefined) {
@@ -628,6 +654,38 @@ export function getDiff(actual: SpanTree | null, expected: ExpectedSpan, path = 
     ) {
       diffs.push(
         `${path}.metrics.completion_tokens: expected ${expected.metrics.completion_tokens}, got ${actual.metrics?.completion_tokens}`,
+      )
+    }
+    if (
+      expected.metrics.tokens !== undefined &&
+      actual.metrics?.tokens !== expected.metrics.tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.tokens: expected ${expected.metrics.tokens}, got ${actual.metrics?.tokens}`,
+      )
+    }
+    if (
+      expected.metrics.prompt_cached_tokens !== undefined &&
+      actual.metrics?.prompt_cached_tokens !== expected.metrics.prompt_cached_tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.prompt_cached_tokens: expected ${expected.metrics.prompt_cached_tokens}, got ${actual.metrics?.prompt_cached_tokens}`,
+      )
+    }
+    if (
+      expected.metrics.prompt_cache_creation_tokens !== undefined &&
+      actual.metrics?.prompt_cache_creation_tokens !== expected.metrics.prompt_cache_creation_tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.prompt_cache_creation_tokens: expected ${expected.metrics.prompt_cache_creation_tokens}, got ${actual.metrics?.prompt_cache_creation_tokens}`,
+      )
+    }
+    if (
+      expected.metrics.reasoning_tokens !== undefined &&
+      actual.metrics?.reasoning_tokens !== expected.metrics.reasoning_tokens
+    ) {
+      diffs.push(
+        `${path}.metrics.reasoning_tokens: expected ${expected.metrics.reasoning_tokens}, got ${actual.metrics?.reasoning_tokens}`,
       )
     }
   }

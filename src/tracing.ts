@@ -457,12 +457,18 @@ export function createTracingHooks(
           // Mark as processed
           state.processedLlmMessages.add(messageId)
 
-          // Extract token info
+          // Extract token info. OpenCode reports input tokens exclusive of cache
+          // buckets, so normalize prompt_tokens to Braintrust's inclusive
+          // convention by adding cache read/write tokens back in.
           const tokens = messageInfo.tokens as Record<string, unknown> | undefined
+          const cacheTokens = tokens?.cache as Record<string, unknown> | undefined
           const inputTokens = (tokens?.input as number) || 0
           const outputTokens = (tokens?.output as number) || 0
           const reasoningTokens = (tokens?.reasoning as number) || 0
-          const totalTokens = inputTokens + outputTokens + reasoningTokens
+          const cacheReadTokens = (cacheTokens?.read as number) || 0
+          const cacheWriteTokens = (cacheTokens?.write as number) || 0
+          const promptTokens = inputTokens + cacheReadTokens + cacheWriteTokens
+          const totalTokens = promptTokens + outputTokens + reasoningTokens
 
           // Extract model info
           const providerID = (messageInfo.providerID as string) || "unknown"
@@ -524,9 +530,11 @@ export function createTracingHooks(
             metrics: {
               start: msToSeconds(time.created as number),
               end: msToSeconds(time.completed as number),
-              prompt_tokens: inputTokens,
+              prompt_tokens: promptTokens,
               completion_tokens: outputTokens,
               tokens: totalTokens,
+              prompt_cached_tokens: cacheReadTokens || undefined,
+              prompt_cache_creation_tokens: cacheWriteTokens || undefined,
               reasoning_tokens: reasoningTokens || undefined,
             },
             metadata: {

@@ -70,6 +70,44 @@ describe("Event to Span Transformation", () => {
     )
   })
 
+  it("tracks OpenCode cache read/write tokens on LLM spans", async () => {
+    const sessionId = "ses_cache"
+    const messageId = "msg_cache"
+
+    await assertEventsProduceTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Use the cached context"),
+        textPart(sessionId, messageId, "Done."),
+        messageCompleted(sessionId, messageId, {
+          tokens: { input: 10, output: 5, cache: { read: 3, write: 2 } },
+        }),
+        sessionIdle(sessionId),
+      ),
+      {
+        span_attributes: { name: "OpenCode: test-project", type: "task" },
+        children: [
+          {
+            span_attributes: { name: "Turn 1", type: "task" },
+            children: [
+              {
+                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+                metrics: {
+                  prompt_tokens: 15,
+                  completion_tokens: 5,
+                  tokens: 20,
+                  prompt_cached_tokens: 3,
+                  prompt_cache_creation_tokens: 2,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    )
+  })
+
   it("stores modelID on turn metadata from chat.message hook", async () => {
     const sessionId = "ses_turn_model"
     const messageId = "msg_turn_model"
