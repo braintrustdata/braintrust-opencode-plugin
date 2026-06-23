@@ -65,6 +65,9 @@ export interface SpanTree {
     prompt_tokens?: number
     completion_tokens?: number
     tokens?: number
+    prompt_cached_tokens?: number
+    prompt_cache_creation_tokens?: number
+    reasoning_tokens?: number
   }
   metadata?: Record<string, unknown>
   children: SpanTree[]
