@@ -16,6 +16,26 @@ function generateUUID(): string {
   return crypto.randomUUID()
 }
 
+function skillLoadMetadata(tool: string, args: unknown): Record<string, unknown> | undefined {
+  if (tool !== "skill") return undefined
+  const name =
+    args && typeof args === "object" && "name" in args && typeof args.name === "string"
+      ? args.name
+      : undefined
+  return {
+    skill_name: name,
+  }
+}
+
+function skillToolSpanName(tool: string, title: string, args: unknown, fallback: string): string {
+  if (tool !== "skill") return fallback
+  const name =
+    args && typeof args === "object" && "name" in args && typeof args.name === "string"
+      ? args.name
+      : undefined
+  return name ? `skill: ${name}` : title || "skill"
+}
+
 // State management for tracing
 interface SessionState {
   rootSpanId: string
@@ -311,6 +331,7 @@ export class EventProcessor {
     // MCP tools return { content: [{ type: "text", text: "..." }] } instead of a plain
     // output value, so extract the text from content[] as a last resort.
     const rawOutput = capturedOutput !== undefined ? capturedOutput : extractToolOutput(output)
+    const formattedName = this.formatToolName(tool, title)
     const toolSpan: SpanData = {
       id: generateUUID(),
       span_id: toolSpanId,
@@ -323,13 +344,14 @@ export class EventProcessor {
         call_id: callID,
         title,
         reasoning: reasoning || undefined,
+        ...skillLoadMetadata(tool, toolArgs),
       },
       metrics: {
         start: startTime,
         end: endTime,
       },
       span_attributes: {
-        name: this.formatToolName(tool, title),
+        name: skillToolSpanName(tool, title, toolArgs, formattedName),
         type: "tool",
       },
     }

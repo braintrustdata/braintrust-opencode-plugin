@@ -22,6 +22,26 @@ function generateUUID(): string {
   return crypto.randomUUID()
 }
 
+function skillLoadMetadata(tool: string, args: unknown): Record<string, unknown> | undefined {
+  if (tool !== "skill") return undefined
+  const name =
+    args && typeof args === "object" && "name" in args && typeof args.name === "string"
+      ? args.name
+      : undefined
+  return {
+    skill_name: name,
+  }
+}
+
+function skillToolSpanName(tool: string, title: string, args: unknown, fallback: string): string {
+  if (tool !== "skill") return fallback
+  const name =
+    args && typeof args === "object" && "name" in args && typeof args.name === "string"
+      ? args.name
+      : undefined
+  return name ? `skill: ${name}` : title || "skill"
+}
+
 // State management for tracing
 interface SessionState {
   rootSpanId: string
@@ -1018,6 +1038,7 @@ export function createTracingHooks(
         const rawOutput =
           capturedOutput !== undefined ? capturedOutput : extractToolOutput(result.output ?? result)
         const toolOutput = typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput
+        const formattedName = formatToolName(tool, result.title)
         const toolSpan: SpanData = {
           id: generateUUID(),
           span_id: toolSpanId,
@@ -1030,13 +1051,14 @@ export function createTracingHooks(
             call_id: callID,
             title: result.title,
             reasoning: reasoning || undefined,
+            ...skillLoadMetadata(tool, toolArgs),
           },
           metrics: {
             start: startTime,
             end: endTime,
           },
           span_attributes: {
-            name: formatToolName(tool, result.title),
+            name: skillToolSpanName(tool, result.title, toolArgs, formattedName),
             type: "tool",
           },
         }
