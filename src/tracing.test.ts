@@ -244,40 +244,45 @@ describe("Event to Span Transformation", () => {
   it("normalizes native skill tool calls as skill load spans", async () => {
     const sessionId = "ses_skill_tool"
     const messageId = "msg_1"
-
-    await assertEventsProduceTree(
-      session(
-        sessionId,
-        sessionCreated(sessionId),
-        chatMessage("Use the review skill"),
-        toolCallPart(sessionId, messageId, "call_skill", "skill", { name: "review" }),
-        toolExecute("call_skill", "skill", "review", { name: "review" }, "Loaded skill review"),
-        textPart(sessionId, messageId, "Loaded the review skill."),
-        messageCompleted(sessionId, messageId, { tokens: { input: 20, output: 15 } }),
-        sessionIdle(sessionId),
-      ),
-      {
-        span_attributes: { name: "OpenCode: test-project", type: "task" },
-        children: [
-          {
-            span_attributes: { name: "Turn 1", type: "task" },
-            children: [
-              {
-                span_attributes: { name: "skill: review", type: "tool" },
-                metadata: {
-                  tool_name: "skill",
-                  call_id: "call_skill",
-                  skill_name: "review",
-                },
-              },
-              {
-                span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
-              },
-            ],
-          },
-        ],
-      },
+    const skillSession = session(
+      sessionId,
+      sessionCreated(sessionId),
+      chatMessage("Use the review skill"),
+      toolCallPart(sessionId, messageId, "call_skill", "skill", { name: "review" }),
+      toolExecute("call_skill", "skill", "review", { name: "review" }, "Loaded skill review"),
+      textPart(sessionId, messageId, "Loaded the review skill."),
+      messageCompleted(sessionId, messageId, { tokens: { input: 20, output: 15 } }),
+      sessionIdle(sessionId),
     )
+
+    await assertEventsProduceTree(skillSession, {
+      span_attributes: { name: "OpenCode: test-project", type: "task" },
+      children: [
+        {
+          span_attributes: { name: "Turn 1", type: "task" },
+          children: [
+            {
+              span_attributes: { name: "skill: review", type: "tool" },
+              metadata: {
+                tool_name: "skill",
+                call_id: "call_skill",
+                skill_name: "review",
+              },
+            },
+            {
+              span_attributes: { name: "anthropic/claude-3-haiku", type: "llm" },
+            },
+          ],
+        },
+      ],
+    })
+
+    const tree = await eventsToTree(skillSession)
+    const turn = tree?.children[0]
+    const skillSpan = turn?.children.find((child) => child.name === "skill: review")
+    expect(turn?.metadata?.loaded_skill_names).toBeUndefined()
+    expect(turn?.metadata?.loaded_skills).toBeUndefined()
+    expect(skillSpan?.metadata?.skill_load_trigger).toBeUndefined()
   })
 
   it("session -> turn -> multiple tool calls", async () => {
