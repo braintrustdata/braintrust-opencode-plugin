@@ -44,6 +44,7 @@ Create a `braintrust.json` file in one of these locations:
 ```json
 {
   "trace_to_braintrust": true,
+  "enable_tools": true,
   "project": "my-project",
   "api_key": "your-api-key",
   "debug": true
@@ -55,6 +56,7 @@ Create a `braintrust.json` file in one of these locations:
 | Config Key | Env Var | Type | Default | Description |
 |------------|---------|------|---------|-------------|
 | `trace_to_braintrust` | `TRACE_TO_BRAINTRUST` | boolean | `false` | Enable/disable tracing |
+| `enable_tools` | `BRAINTRUST_OPENCODE_ENABLE_TOOLS` | boolean | `true` | Register Braintrust tools in OpenCode |
 | `project` | `BRAINTRUST_PROJECT` | string | `"opencode"` | Project name for traces |
 | `debug` | `BRAINTRUST_DEBUG` | boolean | `false` | Enable debug logging |
 | `api_key` | `BRAINTRUST_API_KEY` | string | | API key for authentication |
@@ -71,6 +73,24 @@ Configuration is loaded with the following precedence (later overrides earlier):
 2. `~/.config/opencode/braintrust.json` (global config)
 3. `.opencode/braintrust.json` (project config)
 4. Environment variables (highest priority)
+
+## Disabling Braintrust Tools
+
+Set `enable_tools` to `false` to trace OpenCode sessions without registering Braintrust-branded tools (`braintrust_query_logs`, `braintrust_list_projects`, `braintrust_log_data`, `braintrust_get_experiments`):
+
+```json
+{
+  "trace_to_braintrust": true,
+  "enable_tools": false,
+  "project": "my-project"
+}
+```
+
+Or use the environment variable:
+
+```bash
+BRAINTRUST_OPENCODE_ENABLE_TOOLS=false TRACE_TO_BRAINTRUST=true opencode
+```
 
 ## Adding Dynamic Metadata
 

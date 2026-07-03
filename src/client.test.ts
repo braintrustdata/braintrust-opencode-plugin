@@ -59,6 +59,7 @@ describe("loadConfig", () => {
     "BRAINTRUST_ORG_NAME",
     "BRAINTRUST_PROJECT",
     "BRAINTRUST_ADDITIONAL_METADATA",
+    "BRAINTRUST_OPENCODE_ENABLE_TOOLS",
   ]
 
   beforeEach(() => {
@@ -89,6 +90,7 @@ describe("loadConfig", () => {
       expect(config.orgName).toBeUndefined()
       expect(config.projectName).toBe("opencode")
       expect(config.tracingEnabled).toBe(false)
+      expect(config.enableTools).toBe(true)
       expect(config.debug).toBe(false)
     })
   })
@@ -129,6 +131,18 @@ describe("loadConfig", () => {
       const config = loadConfig()
       expect(config.debug).toBe(true)
     })
+
+    it("BRAINTRUST_OPENCODE_ENABLE_TOOLS=false disables tools", () => {
+      process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS = "false"
+      const config = loadConfig()
+      expect(config.enableTools).toBe(false)
+    })
+
+    it("BRAINTRUST_OPENCODE_ENABLE_TOOLS=1 enables tools", () => {
+      process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS = "1"
+      const config = loadConfig()
+      expect(config.enableTools).toBe(true)
+    })
   })
 
   describe("pluginConfig only (from opencode.json)", () => {
@@ -140,6 +154,7 @@ describe("loadConfig", () => {
         org_name: "test-org",
         project: "test-project",
         trace_to_braintrust: true,
+        enable_tools: false,
         debug: true,
       }
       const config = loadConfig(pluginConfig)
@@ -149,6 +164,7 @@ describe("loadConfig", () => {
       expect(config.orgName).toBe("test-org")
       expect(config.projectName).toBe("test-project")
       expect(config.tracingEnabled).toBe(true)
+      expect(config.enableTools).toBe(false)
       expect(config.debug).toBe(true)
     })
 
@@ -167,10 +183,12 @@ describe("loadConfig", () => {
     it("handles pluginConfig with false booleans", () => {
       const pluginConfig: PluginConfig = {
         trace_to_braintrust: false,
+        enable_tools: false,
         debug: false,
       }
       const config = loadConfig(pluginConfig)
       expect(config.tracingEnabled).toBe(false)
+      expect(config.enableTools).toBe(false)
       expect(config.debug).toBe(false)
     })
   })
@@ -202,6 +220,20 @@ describe("loadConfig", () => {
       const pluginConfig: PluginConfig = { debug: false }
       const config = loadConfig(pluginConfig)
       expect(config.debug).toBe(true)
+    })
+
+    it("env var overrides pluginConfig for enable_tools", () => {
+      process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS = "true"
+      const pluginConfig: PluginConfig = { enable_tools: false }
+      const config = loadConfig(pluginConfig)
+      expect(config.enableTools).toBe(true)
+    })
+
+    it("env var can disable tools when pluginConfig enables them", () => {
+      process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS = "0"
+      const pluginConfig: PluginConfig = { enable_tools: true }
+      const config = loadConfig(pluginConfig)
+      expect(config.enableTools).toBe(false)
     })
 
     it("pluginConfig is used when env var is not set", () => {

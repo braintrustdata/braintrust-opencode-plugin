@@ -63,11 +63,12 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
       .catch(() => {})
   }
 
-  // Create Braintrust client but don't initialize yet (lazy initialization)
+  // Create Braintrust client only when at least one Braintrust-backed feature is enabled
   let btClient: BraintrustClient | undefined
   let _initPromise: Promise<void> | undefined
+  const featuresEnabled = config.tracingEnabled || config.enableTools
 
-  if (config.apiKey) {
+  if (config.apiKey && featuresEnabled) {
     btClient = new BraintrustClient(config)
     // Start initialization in background, don't await
     _initPromise = btClient.initialize().catch((error) => {
@@ -118,8 +119,8 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
       .catch(() => {})
   }
 
-  // Add Braintrust tools if client is available
-  if (btClient) {
+  // Add Braintrust tools if enabled and client is available
+  if (btClient && config.enableTools) {
     hooks.tool = createBraintrustTools(btClient)
   }
 
@@ -130,7 +131,18 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
         body: {
           service: "braintrust",
           level: "info",
-          message: `Logging Braintrust spans to project "${config.projectName}"`,
+          message: `Braintrust plugin enabled for project "${config.projectName}"`,
+        },
+      })
+      .catch(() => {})
+  } else if (featuresEnabled) {
+    client.app
+      .log({
+        body: {
+          service: "braintrust",
+          level: "warn",
+          message:
+            "Braintrust plugin loaded but BRAINTRUST_API_KEY not set. Set it in your environment to enable tracing and data access.",
         },
       })
       .catch(() => {})
@@ -139,9 +151,8 @@ export const BraintrustPlugin: Plugin = async (input: PluginInput) => {
       .log({
         body: {
           service: "braintrust",
-          level: "warn",
-          message:
-            "Braintrust plugin loaded but BRAINTRUST_API_KEY not set. Set it in your environment to enable tracing and data access.",
+          level: "info",
+          message: "Braintrust tracing and tools are disabled.",
         },
       })
       .catch(() => {})

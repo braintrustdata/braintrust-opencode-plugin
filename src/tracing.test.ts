@@ -402,6 +402,7 @@ describe("Metric timestamps use Unix seconds", () => {
         appUrl: "https://www.braintrust.dev",
         projectName: "test-project",
         tracingEnabled: true,
+        enableTools: true,
         debug: false,
       },
     )
@@ -773,6 +774,7 @@ describe("System prompt capture: production hooks", () => {
         appUrl: "https://www.braintrust.dev",
         projectName: "test-project",
         tracingEnabled: true,
+        enableTools: true,
         debug: false,
       },
     )
