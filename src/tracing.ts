@@ -22,6 +22,11 @@ function generateUUID(): string {
   return crypto.randomUUID()
 }
 
+interface ExplicitSkillRequestMetadata {
+  loaded_skill_names: string[]
+  loaded_skills: Array<{ name: string }>
+}
+
 function skillLoadMetadata(tool: string, args: unknown): Record<string, unknown> | undefined {
   if (tool !== "skill") return undefined
   const name =
@@ -31,6 +36,60 @@ function skillLoadMetadata(tool: string, args: unknown): Record<string, unknown>
   return {
     skill_name: name,
   }
+}
+
+function skillNameFromArgs(args: unknown): string | undefined {
+  return args && typeof args === "object" && "name" in args && typeof args.name === "string"
+    ? args.name
+    : undefined
+}
+
+function normalizeExplicitSkillName(name: string): string | undefined {
+  const normalized = name.trim().replace(/[),.;]+$/, "")
+  return normalized ? normalized : undefined
+}
+
+function explicitSkillRequestMetadata(
+  names: readonly string[],
+): ExplicitSkillRequestMetadata | undefined {
+  const seen = new Set<string>()
+  const loaded_skill_names: string[] = []
+  for (const name of names) {
+    const normalized = normalizeExplicitSkillName(name)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    loaded_skill_names.push(normalized)
+  }
+  if (loaded_skill_names.length === 0) return undefined
+  return {
+    loaded_skill_names,
+    loaded_skills: loaded_skill_names.map((name) => ({ name })),
+  }
+}
+
+function explicitSkillNamesFromUserMessage(message: string): string[] {
+  const names: string[] = []
+  for (const match of message.matchAll(/(?:^|\s)\/skills(?::|\s+)([A-Za-z0-9_.:-]+)/g)) {
+    names.push(match[1] ?? "")
+  }
+  return explicitSkillRequestMetadata(names)?.loaded_skill_names ?? []
+}
+
+function isExplicitSkillsCommand(message: string): boolean {
+  return /(?:^|\s)\/skills(?=$|\s|:)/.test(message)
+}
+
+function skillLoadTrigger(
+  explicitSkillsCommand: boolean | undefined,
+  explicitSkillNames: readonly string[] | undefined,
+  tool: string,
+  args: unknown,
+): "explicit" | undefined {
+  if (tool !== "skill") return undefined
+  const name = skillNameFromArgs(args)
+  if (name === undefined) return undefined
+  if (explicitSkillNames?.includes(name)) return "explicit"
+  return explicitSkillsCommand ? "explicit" : undefined
 }
 
 function skillToolSpanName(tool: string, title: string, args: unknown, fallback: string): string {
@@ -54,6 +113,8 @@ interface SessionState {
   currentInput?: string
   currentOutput?: string
   currentMessageId?: string
+  currentTurnExplicitSkillsCommand?: boolean
+  currentTurnExplicitSkillNames?: string[]
   // Joined system prompt captured from experimental.chat.system.transform
   systemPrompt?: string
   // Parent-child session tracking (for subagents)
@@ -877,6 +938,8 @@ export function createTracingHooks(
             .join("\n") || ""
 
         state.currentInput = userMessage
+        state.currentTurnExplicitSkillsCommand = isExplicitSkillsCommand(userMessage)
+        state.currentTurnExplicitSkillNames = explicitSkillNamesFromUserMessage(userMessage)
         const now = wallClock.now()
         const nowSeconds = msToSeconds(now)
         state.currentTurnStartTime = now
@@ -901,6 +964,7 @@ export function createTracingHooks(
               typeof messageInput.model === "object" && messageInput.model
                 ? `${(messageInput.model as { modelID?: string }).modelID}`
                 : String(messageInput.model || ""),
+            ...explicitSkillRequestMetadata(state.currentTurnExplicitSkillNames),
           },
           metrics: {
             start: nowSeconds,
@@ -1039,6 +1103,35 @@ export function createTracingHooks(
           capturedOutput !== undefined ? capturedOutput : extractToolOutput(result.output ?? result)
         const toolOutput = typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput
         const formattedName = formatToolName(tool, result.title)
+        const trigger = skillLoadTrigger(
+          state.currentTurnExplicitSkillsCommand,
+          state.currentTurnExplicitSkillNames,
+          tool,
+          toolArgs,
+        )
+        const skillName = skillNameFromArgs(toolArgs)
+        if (
+          trigger === "explicit" &&
+          skillName !== undefined &&
+          !state.currentTurnExplicitSkillNames?.includes(skillName)
+        ) {
+          state.currentTurnExplicitSkillNames = [
+            ...(state.currentTurnExplicitSkillNames ?? []),
+            skillName,
+          ]
+          const explicitSkillMetadata = explicitSkillRequestMetadata(
+            state.currentTurnExplicitSkillNames,
+          )
+          if (explicitSkillMetadata !== undefined) {
+            enqueue({
+              id: state.currentTurnSpanId,
+              span_id: state.currentTurnSpanId,
+              root_span_id: state.effectiveRootSpanId,
+              metadata: explicitSkillMetadata,
+              _is_merge: true,
+            })
+          }
+        }
         const toolSpan: SpanData = {
           id: generateUUID(),
           span_id: toolSpanId,
@@ -1052,6 +1145,7 @@ export function createTracingHooks(
             title: result.title,
             reasoning: reasoning || undefined,
             ...skillLoadMetadata(tool, toolArgs),
+            ...(trigger !== undefined ? { skill_load_trigger: trigger } : {}),
           },
           metrics: {
             start: startTime,

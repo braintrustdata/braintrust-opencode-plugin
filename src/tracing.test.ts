@@ -285,6 +285,52 @@ describe("Event to Span Transformation", () => {
     expect(skillSpan?.metadata?.skill_load_trigger).toBeUndefined()
   })
 
+  it("marks /skills skill tool calls as explicit", async () => {
+    const sessionId = "ses_explicit_skill_tool"
+    const messageId = "msg_1"
+    const skillSession = session(
+      sessionId,
+      sessionCreated(sessionId),
+      chatMessage("/skills review"),
+      toolCallPart(sessionId, messageId, "call_skill", "skill", { name: "review" }),
+      toolExecute("call_skill", "skill", "review", { name: "review" }, "Loaded skill review"),
+      textPart(sessionId, messageId, "Loaded the review skill."),
+      messageCompleted(sessionId, messageId, { tokens: { input: 20, output: 15 } }),
+      sessionIdle(sessionId),
+    )
+
+    const tree = await eventsToTree(skillSession)
+    const turn = tree?.children[0]
+    const skillSpan = turn?.children.find((child) => child.name === "skill: review")
+
+    expect(turn?.metadata?.loaded_skill_names).toEqual(["review"])
+    expect(turn?.metadata?.loaded_skills).toEqual([{ name: "review" }])
+    expect(skillSpan?.metadata?.skill_load_trigger).toBe("explicit")
+  })
+
+  it("backfills bare /skills commands from the selected skill tool call", async () => {
+    const sessionId = "ses_bare_explicit_skill_tool"
+    const messageId = "msg_1"
+    const skillSession = session(
+      sessionId,
+      sessionCreated(sessionId),
+      chatMessage("/skills"),
+      toolCallPart(sessionId, messageId, "call_skill", "skill", { name: "review" }),
+      toolExecute("call_skill", "skill", "review", { name: "review" }, "Loaded skill review"),
+      textPart(sessionId, messageId, "Loaded the review skill."),
+      messageCompleted(sessionId, messageId, { tokens: { input: 20, output: 15 } }),
+      sessionIdle(sessionId),
+    )
+
+    const tree = await eventsToTree(skillSession)
+    const turn = tree?.children[0]
+    const skillSpan = turn?.children.find((child) => child.name === "skill: review")
+
+    expect(turn?.metadata?.loaded_skill_names).toEqual(["review"])
+    expect(turn?.metadata?.loaded_skills).toEqual([{ name: "review" }])
+    expect(skillSpan?.metadata?.skill_load_trigger).toBe("explicit")
+  })
+
   it("session -> turn -> multiple tool calls", async () => {
     const sessionId = "ses_multi_tool"
     const messageId = "msg_1"
