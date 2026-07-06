@@ -9,6 +9,7 @@ export interface BraintrustConfig {
   orgName?: string
   projectName: string
   tracingEnabled: boolean
+  enableTools: boolean
   debug: boolean
   logToFile?: string // Path to write NDJSON log of all plugin I/O, or "auto" for default path
   additionalMetadata?: Record<string, unknown>
@@ -26,6 +27,7 @@ export interface PluginConfig {
   org_name?: string
   project?: string
   trace_to_braintrust?: boolean
+  enable_tools?: boolean
   debug?: boolean
   log_to_file?: string // Path to write NDJSON log of all plugin I/O, or "true"/"auto" for default path
   additional_metadata?: Record<string, unknown>
@@ -108,6 +110,7 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     orgName: undefined,
     projectName: "opencode",
     tracingEnabled: false,
+    enableTools: true,
     debug: false,
     logToFile: undefined,
   }
@@ -121,6 +124,9 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     if (pluginConfig.project) defaults.projectName = pluginConfig.project
     if (pluginConfig.trace_to_braintrust !== undefined) {
       defaults.tracingEnabled = pluginConfig.trace_to_braintrust
+    }
+    if (pluginConfig.enable_tools !== undefined) {
+      defaults.enableTools = pluginConfig.enable_tools
     }
     if (pluginConfig.debug !== undefined) {
       defaults.debug = pluginConfig.debug
@@ -170,6 +176,9 @@ export function loadConfig(pluginConfig?: PluginConfig): BraintrustConfig {
     tracingEnabled: process.env.TRACE_TO_BRAINTRUST
       ? parseBooleanEnv(process.env.TRACE_TO_BRAINTRUST)
       : defaults.tracingEnabled,
+    enableTools: process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS
+      ? parseBooleanEnv(process.env.BRAINTRUST_OPENCODE_ENABLE_TOOLS)
+      : defaults.enableTools,
     debug: process.env.BRAINTRUST_DEBUG
       ? parseBooleanEnv(process.env.BRAINTRUST_DEBUG)
       : defaults.debug,

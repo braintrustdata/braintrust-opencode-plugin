@@ -27,6 +27,7 @@ Create a `braintrust.json` file in one of these locations:
 ```json
 {
   "trace_to_braintrust": true,
+  "enable_tools": true,
   "project": "my-project",
   "debug": true
 }
@@ -37,6 +38,7 @@ Create a `braintrust.json` file in one of these locations:
 | Config Key | Env Var | Type | Default | Description |
 |------------|---------|------|---------|-------------|
 | `trace_to_braintrust` | `TRACE_TO_BRAINTRUST` | boolean | `false` | Enable/disable tracing |
+| `enable_tools` | `BRAINTRUST_OPENCODE_ENABLE_TOOLS` | boolean | `true` | Register Braintrust tools in OpenCode |
 | `project` | `BRAINTRUST_PROJECT` | string | `"opencode"` | Project name for traces |
 | `debug` | `BRAINTRUST_DEBUG` | boolean | `false` | Enable debug logging |
 | `api_key` | `BRAINTRUST_API_KEY` | string | | API key for authentication |
