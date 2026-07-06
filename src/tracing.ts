@@ -34,6 +34,7 @@ function skillLoadMetadata(tool: string, args: unknown): Record<string, unknown>
       ? args.name
       : undefined
   return {
+    tool_kind: "skill",
     skill_name: name,
   }
 }

@@ -265,6 +265,7 @@ describe("Event to Span Transformation", () => {
               span_attributes: { name: "skill: review", type: "tool" },
               metadata: {
                 tool_name: "skill",
+                tool_kind: "skill",
                 call_id: "call_skill",
                 skill_name: "review",
               },
