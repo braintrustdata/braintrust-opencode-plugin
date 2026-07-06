@@ -22,7 +22,7 @@ function generateUUID(): string {
   return crypto.randomUUID()
 }
 
-interface ExplicitSkillRequestMetadata {
+interface ExplicitSkillRequestMetadata extends Record<string, unknown> {
   loaded_skill_names: string[]
   loaded_skills: Array<{ name: string }>
 }
