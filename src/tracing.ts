@@ -14,6 +14,7 @@ import type { BraintrustConfig, SpanData } from "./client"
 import { msToSeconds, wallClock } from "./clock"
 import { extractToolOutput } from "./event-processor"
 import type { FileLogger } from "./file-logger"
+import { gitMetadataForCwd } from "./git-metadata"
 import type { SpanQueue } from "./span-queue"
 import type { SpanSink } from "./span-sink"
 
@@ -374,6 +375,7 @@ export function createTracingHooks(
               session_id: sessionKey,
               workspace: input.worktree,
               directory: input.directory,
+              ...gitMetadataForCwd(input.directory || input.worktree),
               hostname: getHostname(),
               username: getUsername(),
               os: getOS(),
@@ -895,6 +897,7 @@ export function createTracingHooks(
               session_id: sessionID,
               workspace: input.worktree,
               directory: input.directory,
+              ...gitMetadataForCwd(input.directory || input.worktree),
               hostname: getHostname(),
               username: getUsername(),
               os: getOS(),
