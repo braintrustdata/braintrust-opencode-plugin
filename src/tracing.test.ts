@@ -429,6 +429,7 @@ describe("Metric timestamps use Unix seconds", () => {
         projectName: "test-project",
         tracingEnabled: true,
         debug: false,
+        enableTools: false,
       },
     )
 
