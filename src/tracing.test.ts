@@ -5,6 +5,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test"
+import { execFileSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -33,10 +34,35 @@ import {
 } from "./test-helpers"
 import { createTracingHooks } from "./tracing"
 
+const tempDirs: string[] = []
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    fs.rmSync(tempDirs.pop()!, { recursive: true, force: true })
+  }
+})
+
 function expectUnixSecondsTimestamp(value: number | undefined): void {
   expect(value).toBeDefined()
   expect(value!).toBeGreaterThan(1_000_000_000)
   expect(value!).toBeLessThan(10_000_000_000)
+}
+
+function makeGitRepo(): { dir: string; commit: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-root-git-"))
+  tempDirs.push(dir)
+  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" })
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir })
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir })
+  fs.writeFileSync(path.join(dir, "README.md"), "hello\n")
+  execFileSync("git", ["add", "README.md"], { cwd: dir })
+  execFileSync("git", ["commit", "-m", "init"], { cwd: dir, stdio: "ignore" })
+  execFileSync("git", ["branch", "-M", "main"], { cwd: dir })
+  execFileSync("git", ["remote", "add", "origin", "https://token@github.com/acme/app.git"], {
+    cwd: dir,
+  })
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim()
+  return { dir, commit }
 }
 
 describe("Event to Span Transformation", () => {
@@ -379,6 +405,41 @@ describe("Metric timestamps use Unix seconds", () => {
     expectUnixSecondsTimestamp(toolSpan?.metrics?.end)
     expectUnixSecondsTimestamp(llmSpan?.metrics?.start)
     expectUnixSecondsTimestamp(llmSpan?.metrics?.end)
+  })
+
+  it("adds minimal git attribution metadata to production root spans", async () => {
+    const repo = makeGitRepo()
+    const sessionId = "ses_hooks_git"
+    const collector = new TestSpanCollector()
+    const hooks = createTracingHooks(
+      collector,
+      {
+        client: {
+          app: {
+            log: async () => undefined,
+          },
+        },
+        worktree: repo.dir,
+        directory: repo.dir,
+      } as any,
+      {
+        apiKey: "",
+        apiUrl: "https://api.braintrust.dev",
+        appUrl: "https://www.braintrust.dev",
+        projectName: "test-project",
+        tracingEnabled: true,
+        debug: false,
+      },
+    )
+
+    const eventHook = hooks.event as (args: { event: unknown }) => Promise<void>
+    await eventHook({ event: sessionCreated(sessionId) })
+
+    expect(collector.getSpans()[0]?.metadata).toMatchObject({
+      git_origin_url: "https://github.com/acme/app.git",
+      git_branch: "main",
+      git_commit_sha: repo.commit,
+    })
   })
 
   it("converts createTracingHooks span metrics from milliseconds to seconds", async () => {
