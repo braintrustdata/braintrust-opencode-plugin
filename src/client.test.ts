@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { readFileSync } from "node:fs"
+import manifest from "../package.json" with { type: "json" }
 import { BraintrustClient, loadConfig, type PluginConfig, parseBooleanEnv } from "./client"
 
 describe("parseBooleanEnv", () => {
@@ -304,9 +304,6 @@ describe("BraintrustClient span origin", () => {
   })
 
   it("uses the package.json version for span origin provenance", async () => {
-    const packageJson = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    ) as { version: string }
     let payload: { events?: Array<{ context?: { span_origin?: { version?: string } } }> } = {}
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       payload = JSON.parse(String(init?.body))
@@ -334,6 +331,6 @@ describe("BraintrustClient span origin", () => {
       root_span_id: "span-id",
     })
 
-    expect(payload.events?.[0]?.context?.span_origin?.version).toBe(packageJson.version)
+    expect(payload.events?.[0]?.context?.span_origin?.version).toBe(manifest.version)
   })
 })
