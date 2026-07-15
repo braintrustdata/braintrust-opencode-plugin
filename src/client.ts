@@ -71,14 +71,16 @@ export interface SpanData {
   _is_merge?: boolean // When true, merge with existing span by id instead of creating new row
 }
 
-function detectEnvironment(): { type: string; name?: string } | undefined {
-  if (process.env.BRAINTRUST_ENVIRONMENT_TYPE) {
-    return process.env.BRAINTRUST_ENVIRONMENT_NAME
-      ? {
-          type: process.env.BRAINTRUST_ENVIRONMENT_TYPE,
-          name: process.env.BRAINTRUST_ENVIRONMENT_NAME,
-        }
-      : { type: process.env.BRAINTRUST_ENVIRONMENT_TYPE }
+function detectEnvironment(): { type?: string; name?: string } | undefined {
+  if (process.env.BRAINTRUST_ENVIRONMENT_TYPE || process.env.BRAINTRUST_ENVIRONMENT_NAME) {
+    return {
+      ...(process.env.BRAINTRUST_ENVIRONMENT_TYPE
+        ? { type: process.env.BRAINTRUST_ENVIRONMENT_TYPE }
+        : {}),
+      ...(process.env.BRAINTRUST_ENVIRONMENT_NAME
+        ? { name: process.env.BRAINTRUST_ENVIRONMENT_NAME }
+        : {}),
+    }
   }
   if (process.env.GITHUB_ACTIONS) return { type: "ci", name: "github_actions" }
   if (process.env.GITLAB_CI) return { type: "ci", name: "gitlab_ci" }
