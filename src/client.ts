@@ -74,7 +74,10 @@ const PLUGIN_VERSION = "0.0.9"
 function detectEnvironment(): { type: string; name?: string } | undefined {
   if (process.env.BRAINTRUST_ENVIRONMENT_TYPE) {
     return process.env.BRAINTRUST_ENVIRONMENT_NAME
-      ? { type: process.env.BRAINTRUST_ENVIRONMENT_TYPE, name: process.env.BRAINTRUST_ENVIRONMENT_NAME }
+      ? {
+          type: process.env.BRAINTRUST_ENVIRONMENT_TYPE,
+          name: process.env.BRAINTRUST_ENVIRONMENT_NAME,
+        }
       : { type: process.env.BRAINTRUST_ENVIRONMENT_TYPE }
   }
   if (process.env.GITHUB_ACTIONS) return { type: "ci", name: "github_actions" }
