@@ -87,6 +87,19 @@ function detectEnvironment(): { type: string; name?: string } | undefined {
   if (process.env.CI) return { type: "ci", name: "ci" }
   if (process.env.VERCEL) return { type: "server", name: "vercel" }
   if (process.env.NETLIFY) return { type: "server", name: "netlify" }
+  if (
+    process.env.ECS_CONTAINER_METADATA_URI ||
+    process.env.ECS_CONTAINER_METADATA_URI_V4 ||
+    process.env.AWS_EXECUTION_ENV?.startsWith("AWS_ECS_")
+  ) {
+    return { type: "server", name: "ecs" }
+  }
+  if (
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_EXECUTION_ENV?.startsWith("AWS_Lambda_")
+  ) {
+    return { type: "server", name: "aws_lambda" }
+  }
   if (process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging") {
     return { type: "server", name: process.env.NODE_ENV }
   }
