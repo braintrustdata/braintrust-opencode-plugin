@@ -2,6 +2,8 @@
  * Braintrust API client for the OpenCode plugin
  */
 
+import { readFileSync } from "node:fs"
+
 export interface BraintrustConfig {
   apiKey: string
   apiUrl?: string
@@ -69,7 +71,18 @@ export interface SpanData {
   _is_merge?: boolean // When true, merge with existing span by id instead of creating new row
 }
 
-const PLUGIN_VERSION = "0.0.9"
+function loadPluginVersion(): string {
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version?: unknown }
+    return typeof packageJson.version === "string" ? packageJson.version : "unknown"
+  } catch {
+    return "unknown"
+  }
+}
+
+const PLUGIN_VERSION = loadPluginVersion()
 
 function detectEnvironment(): { type: string; name?: string } | undefined {
   if (process.env.BRAINTRUST_ENVIRONMENT_TYPE) {
