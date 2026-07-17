@@ -2,6 +2,8 @@
  * Braintrust API client for the OpenCode plugin
  */
 
+import { PLUGIN_VERSION } from "./version"
+
 export interface BraintrustConfig {
   apiKey: string
   apiUrl?: string
@@ -60,12 +62,69 @@ export interface SpanData {
     caller_functionname?: string
     caller_filename?: string
     caller_lineno?: number
+    span_origin?: Record<string, unknown>
   }
   span_attributes?: {
     name?: string
     type?: "llm" | "task" | "tool" | "function" | "eval" | "score"
   }
   _is_merge?: boolean // When true, merge with existing span by id instead of creating new row
+}
+
+function detectEnvironment(): { type?: string; name?: string } | undefined {
+  if (process.env.BRAINTRUST_ENVIRONMENT_TYPE || process.env.BRAINTRUST_ENVIRONMENT_NAME) {
+    return {
+      ...(process.env.BRAINTRUST_ENVIRONMENT_TYPE
+        ? { type: process.env.BRAINTRUST_ENVIRONMENT_TYPE }
+        : {}),
+      ...(process.env.BRAINTRUST_ENVIRONMENT_NAME
+        ? { name: process.env.BRAINTRUST_ENVIRONMENT_NAME }
+        : {}),
+    }
+  }
+  if (process.env.GITHUB_ACTIONS) return { type: "ci", name: "github_actions" }
+  if (process.env.GITLAB_CI) return { type: "ci", name: "gitlab_ci" }
+  if (process.env.CIRCLECI) return { type: "ci", name: "circleci" }
+  if (process.env.BUILDKITE) return { type: "ci", name: "buildkite" }
+  if (process.env.CI) return { type: "ci", name: "ci" }
+  if (process.env.VERCEL) return { type: "server", name: "vercel" }
+  if (process.env.NETLIFY) return { type: "server", name: "netlify" }
+  if (
+    process.env.ECS_CONTAINER_METADATA_URI ||
+    process.env.ECS_CONTAINER_METADATA_URI_V4 ||
+    process.env.AWS_EXECUTION_ENV?.startsWith("AWS_ECS_")
+  ) {
+    return { type: "server", name: "ecs" }
+  }
+  if (
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_EXECUTION_ENV?.startsWith("AWS_Lambda_")
+  ) {
+    return { type: "server", name: "aws_lambda" }
+  }
+  if (process.env.NODE_ENV === "production" || process.env.NODE_ENV === "staging") {
+    return { type: "server", name: process.env.NODE_ENV }
+  }
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "local") {
+    return { type: "local", name: process.env.NODE_ENV }
+  }
+  return undefined
+}
+
+function withSpanOrigin(span: SpanData): SpanData {
+  const environment = detectEnvironment()
+  return {
+    ...span,
+    context: {
+      ...(span.context ?? {}),
+      span_origin: {
+        name: "braintrust.plugin.opencode",
+        version: PLUGIN_VERSION,
+        instrumentation: { name: "opencode-tracing" },
+        ...(environment ? { environment } : {}),
+      },
+    },
+  }
 }
 
 interface LoginResponse {
@@ -345,7 +404,8 @@ export class BraintrustClient {
     }
 
     try {
-      const payload = { events: [span] }
+      const enrichedSpan = withSpanOrigin(span)
+      const payload = { events: [enrichedSpan] }
       debugLog?.("insertSpan: sending", {
         spanId: span.span_id,
         isMerge: span._is_merge,
