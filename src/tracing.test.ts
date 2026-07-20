@@ -29,6 +29,7 @@ import {
   systemTransform,
   textPart,
   toolCallCompletedPart,
+  toolCallErrorPart,
   toolCallPart,
   toolExecute,
 } from "./test-helpers"
@@ -1043,8 +1044,82 @@ describe("Reasoning/Thinking Content", () => {
     expect(toolSpan?.type).toBe("tool")
     // Output should come from the completed state, not the (undefined) hook result
     expect(toolSpan?.output).toBe(toolOutput)
+    expect(toolSpan?.metadata?.tool_approval).toBe("approved")
     // Input should still be the args
     expect(toolSpan?.input).toEqual(toolArgs)
+  })
+
+  it("tool span error is captured from message.part.updated error state", async () => {
+    const sessionId = "ses_tool_error"
+    const messageId = "msg_1"
+    const toolArgs = { filePath: "/missing.ts" }
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Read the file"),
+        toolCallPart(sessionId, messageId, "call_1", "read", toolArgs),
+        toolCallErrorPart(sessionId, messageId, "call_1", "read", toolArgs, "File not found"),
+        toolExecute("call_1", "read", "/missing.ts", toolArgs, undefined),
+        textPart(sessionId, messageId, "The file was missing."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turnSpan = tree?.children[0]
+    const toolSpan = turnSpan?.children.find((c) => c.type === "tool")
+
+    expect(toolSpan?.output).toBe("File not found")
+    expect(toolSpan?.error).toBe("File not found")
+    expect(toolSpan?.metadata?.tool_approval).toBe("approved")
+  })
+
+  it("permission rejection creates one denied tool span", async () => {
+    const sessionId = "ses_tool_denied"
+    const messageId = "msg_1"
+    const toolArgs = { filePath: "/secret.ts" }
+
+    const tree = await eventsToTree(
+      session(
+        sessionId,
+        sessionCreated(sessionId),
+        chatMessage("Read the file"),
+        toolCallPart(sessionId, messageId, "call_1", "read", toolArgs),
+        {
+          type: "permission.asked",
+          properties: {
+            permission: {
+              id: "perm_1",
+              sessionID: sessionId,
+              title: "Read secret",
+              type: "tool",
+              tool: { callID: "call_1", name: "read", input: toolArgs },
+            },
+          },
+        } as any,
+        {
+          type: "permission.replied",
+          properties: {
+            id: "perm_1",
+            reply: "reject",
+          },
+        } as any,
+        toolExecute("call_1", "read", "/secret.ts", toolArgs, "should not emit"),
+        textPart(sessionId, messageId, "I could not read it."),
+        messageCompleted(sessionId, messageId, { tokens: { input: 10, output: 5 } }),
+        sessionIdle(sessionId),
+      ),
+    )
+
+    const turnSpan = tree?.children[0]
+    const toolSpans = turnSpan?.children.filter((c) => c.type === "tool") ?? []
+    expect(toolSpans).toHaveLength(1)
+    expect(toolSpans[0]?.metadata?.tool_approval).toBe("denied")
+    expect(toolSpans[0]?.metadata?.call_id).toBe("call_1")
+    expect(toolSpans[0]?.output).toBeUndefined()
+    expect(toolSpans[0]?.error).toBeUndefined()
   })
 
   it("tool span includes reasoning in metadata", async () => {
@@ -1781,6 +1856,7 @@ describe("Log file replay", () => {
     expect(toolSpan?.name).toBe("read: config.ts")
     expect(toolSpan?.input).toEqual({ filePath: "/config.ts" })
     expect(toolSpan?.output).toBe("export const debug = true")
+    expect(toolSpan?.metadata?.tool_approval).toBe("approved")
 
     const llmSpan = turn?.children.find((c) => c.type === "llm")
     expect(llmSpan).toBeDefined()

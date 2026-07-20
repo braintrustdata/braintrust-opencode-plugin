@@ -18,6 +18,7 @@ import type {
   TextPart,
   ToolPart,
   ToolStateCompleted,
+  ToolStateError,
   ToolStateRunning,
 } from "@opencode-ai/sdk"
 import { TestClock } from "./clock"
@@ -273,6 +274,38 @@ export function toolCallCompletedPart(
     output,
     title: tool,
     metadata: {},
+    time: { start: Date.now() - 100, end: Date.now() },
+  }
+  const part: ToolPart = {
+    id: `prt_tool_${callID}`,
+    sessionID,
+    messageID,
+    type: "tool",
+    callID,
+    tool,
+    state: toolState,
+  }
+  return {
+    type: "message.part.updated",
+    properties: { part },
+  }
+}
+
+/**
+ * Create message.part.updated event for a failed tool call
+ */
+export function toolCallErrorPart(
+  sessionID: string,
+  messageID: string,
+  callID: string,
+  tool: string,
+  args: Record<string, unknown>,
+  error: string,
+): EventMessagePartUpdated {
+  const toolState: ToolStateError = {
+    status: "error",
+    input: args,
+    error,
     time: { start: Date.now() - 100, end: Date.now() },
   }
   const part: ToolPart = {

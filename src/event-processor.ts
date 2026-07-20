@@ -96,6 +96,20 @@ function skillToolSpanName(tool: string, title: string, args: unknown, fallback:
   return name ? `skill: ${name}` : title || "skill"
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function conciseErrorText(value: unknown, fallback = "Tool execution failed"): string {
+  if (typeof value === "string") return value.split("\n")[0] || fallback
+  if (value instanceof Error) return value.message || fallback
+  if (isRecord(value)) {
+    const candidate = value.error ?? value.message ?? value.stderr ?? value.output ?? value.result
+    if (typeof candidate === "string") return candidate.split("\n")[0] || fallback
+  }
+  return fallback
+}
+
 // State management for tracing
 interface SessionState {
   rootSpanId: string
@@ -131,6 +145,18 @@ interface SessionState {
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
   toolCallArgs: Map<string, unknown> // callID -> tool arguments
   toolCallOutputs: Map<string, unknown> // callID -> tool output (captured from message.part.updated completed state)
+  toolCallErrors: Map<string, string> // callID -> tool error captured from message.part.updated error state
+  deniedToolCallIds: Set<string> // callIDs already emitted as denied spans
+}
+
+interface PermissionRequestRecord {
+  id?: string
+  sessionID?: string
+  callID?: string
+  tool?: string
+  input?: unknown
+  title?: string
+  type?: string
 }
 
 export interface EventProcessorConfig {
@@ -145,6 +171,7 @@ export interface EventProcessorConfig {
  */
 export class EventProcessor {
   private sessionStates = new Map<string, SessionState>()
+  private permissionRequests = new Map<string, PermissionRequestRecord>()
   private spanSink: SpanSink
   private config: EventProcessorConfig
   private log: (msg: string, data?: unknown) => void
@@ -168,23 +195,170 @@ export class EventProcessor {
    * Process a single event
    */
   async processEvent(event: Event): Promise<void> {
+    const eventType = event.type as string
     const props = event.properties as Record<string, unknown>
     const info = props.info as Record<string, unknown> | undefined
     const sessionID = (props.sessionID as string) || (info?.id as string) || (props.id as string)
 
-    if (event.type === "session.created") {
+    if (eventType === "session.created") {
       await this.handleSessionCreated(info)
-    } else if (event.type === "message.part.updated") {
+    } else if (eventType === "message.part.updated") {
       await this.handleMessagePartUpdated(props)
-    } else if (event.type === "message.updated") {
+    } else if (eventType === "message.updated") {
       await this.handleMessageUpdated(props)
-    } else if (event.type === "session.idle") {
+    } else if (eventType === "session.idle") {
       await this.handleSessionIdle(sessionID)
-    } else if (event.type === "session.deleted") {
+    } else if (eventType === "session.deleted") {
       await this.handleSessionDeleted(sessionID)
-    } else if (event.type === "session.error") {
+    } else if (eventType === "session.error") {
       await this.handleSessionError(props)
+    } else if (eventType === "permission.updated" || eventType === "permission.asked") {
+      this.handlePermissionRequest(props)
+    } else if (eventType === "permission.replied") {
+      await this.handlePermissionReplied(props)
     }
+  }
+
+  private permissionRecordFromProps(props: Record<string, unknown>): PermissionRequestRecord {
+    const info = isRecord(props.info) ? props.info : {}
+    const permission = isRecord(props.permission) ? props.permission : {}
+    const source =
+      Object.keys(permission).length > 0 ? permission : Object.keys(info).length > 0 ? info : props
+    const toolRecord = isRecord(source.tool) ? source.tool : {}
+    const id =
+      typeof source.id === "string"
+        ? source.id
+        : typeof props.id === "string"
+          ? props.id
+          : typeof props.permissionID === "string"
+            ? props.permissionID
+            : undefined
+    return {
+      id,
+      sessionID:
+        typeof source.sessionID === "string"
+          ? source.sessionID
+          : typeof props.sessionID === "string"
+            ? props.sessionID
+            : typeof toolRecord.sessionID === "string"
+              ? toolRecord.sessionID
+              : undefined,
+      callID:
+        typeof source.callID === "string"
+          ? source.callID
+          : typeof toolRecord.callID === "string"
+            ? toolRecord.callID
+            : undefined,
+      tool:
+        typeof source.tool === "string"
+          ? source.tool
+          : typeof source.toolName === "string"
+            ? source.toolName
+            : typeof toolRecord.name === "string"
+              ? toolRecord.name
+              : typeof toolRecord.tool === "string"
+                ? toolRecord.tool
+                : undefined,
+      input: source.input ?? source.args ?? toolRecord.input,
+      title: typeof source.title === "string" ? source.title : undefined,
+      type: typeof source.type === "string" ? source.type : undefined,
+    }
+  }
+
+  private handlePermissionRequest(props: Record<string, unknown>): void {
+    const record = this.permissionRecordFromProps(props)
+    if (record.id !== undefined) {
+      this.permissionRequests.set(record.id, record)
+    }
+  }
+
+  private async handlePermissionReplied(props: Record<string, unknown>): Promise<void> {
+    const reply = props.reply ?? props.response
+    if (reply !== "reject" && reply !== "deny" && reply !== "denied") return
+
+    const id =
+      typeof props.id === "string"
+        ? props.id
+        : typeof props.permissionID === "string"
+          ? props.permissionID
+          : typeof props.permission_id === "string"
+            ? props.permission_id
+            : undefined
+    const stored = id !== undefined ? this.permissionRequests.get(id) : undefined
+    const direct = this.permissionRecordFromProps(props)
+    const record: PermissionRequestRecord = {
+      ...stored,
+      ...Object.fromEntries(Object.entries(direct).filter(([, value]) => value !== undefined)),
+    }
+    if (id !== undefined) this.permissionRequests.delete(id)
+    if (record.callID === undefined || record.tool === undefined) return
+
+    await this.emitDeniedToolSpan(record, {
+      permission_id: id ?? record.id,
+      permission_type: record.type,
+      title: record.title,
+    })
+  }
+
+  private stateForPermission(record: PermissionRequestRecord): SessionState | undefined {
+    if (record.sessionID !== undefined) {
+      const direct = this.sessionStates.get(record.sessionID)
+      if (direct?.currentTurnSpanId) return direct
+    }
+    if (record.callID !== undefined) {
+      for (const state of this.sessionStates.values()) {
+        if (
+          state.currentTurnSpanId &&
+          (state.toolCallArgs.has(record.callID) ||
+            state.toolStartTimes.has(record.callID) ||
+            state.toolCallMessageIds.has(record.callID))
+        ) {
+          return state
+        }
+      }
+    }
+    return undefined
+  }
+
+  private async emitDeniedToolSpan(
+    record: PermissionRequestRecord,
+    permissionMetadata: Record<string, unknown>,
+  ): Promise<void> {
+    if (record.callID === undefined || record.tool === undefined) return
+    const state = this.stateForPermission(record)
+    if (!state?.currentTurnSpanId) return
+
+    state.deniedToolCallIds.add(record.callID)
+    const toolArgs = state.toolCallArgs.get(record.callID) ?? record.input ?? permissionMetadata
+    const title = record.title ?? record.tool
+    const toolSpanId = generateUUID()
+    const now = this.clock.nowSeconds()
+    await this.spanSink.insertSpan({
+      id: generateUUID(),
+      span_id: toolSpanId,
+      root_span_id: state.effectiveRootSpanId,
+      span_parents: [state.currentTurnSpanId],
+      input: toolArgs,
+      metadata: {
+        tool_name: record.tool,
+        call_id: record.callID,
+        tool_approval: "denied",
+        ...permissionMetadata,
+      },
+      metrics: {
+        start: state.toolStartTimes.get(record.callID) ?? now,
+        end: now,
+      },
+      span_attributes: {
+        name: skillToolSpanName(
+          record.tool,
+          title,
+          toolArgs,
+          this.formatToolName(record.tool, title),
+        ),
+        type: "tool",
+      },
+    })
   }
 
   /**
@@ -314,6 +488,8 @@ export class EventProcessor {
       toolCallMessageIds: new Map(),
       toolCallArgs: new Map(),
       toolCallOutputs: new Map(),
+      toolCallErrors: new Map(),
+      deniedToolCallIds: new Set(),
     }
     this.sessionStates.set(sessionID, state)
 
@@ -374,6 +550,17 @@ export class EventProcessor {
 
     state.toolCallCount++
 
+    if (state.deniedToolCallIds.has(callID)) {
+      state.deniedToolCallIds.delete(callID)
+      state.toolStartTimes.delete(callID)
+      state.toolCallArgs.delete(callID)
+      state.toolCallOutputs.delete(callID)
+      state.toolCallErrors.delete(callID)
+      state.toolCallMessageIds.delete(callID)
+      this.log("Skipping tool.execute.after for denied tool call", { callID })
+      return
+    }
+
     const startTime = state.toolStartTimes.get(callID)
     state.toolStartTimes.delete(callID)
 
@@ -384,6 +571,8 @@ export class EventProcessor {
     // Get tool output captured from message.part.updated completed state
     const capturedOutput = state.toolCallOutputs.get(callID)
     state.toolCallOutputs.delete(callID)
+    const capturedError = state.toolCallErrors.get(callID)
+    state.toolCallErrors.delete(callID)
 
     // Look up reasoning for this tool call via messageId
     const messageId = state.toolCallMessageIds.get(callID)
@@ -395,7 +584,12 @@ export class EventProcessor {
     // Prefer output captured from message.part.updated, fall back to hook output param.
     // MCP tools return { content: [{ type: "text", text: "..." }] } instead of a plain
     // output value, so extract the text from content[] as a last resort.
-    const rawOutput = capturedOutput !== undefined ? capturedOutput : extractToolOutput(output)
+    const rawOutput =
+      capturedOutput !== undefined
+        ? capturedOutput
+        : capturedError !== undefined
+          ? capturedError
+          : extractToolOutput(output)
     const formattedName = this.formatToolName(tool, title)
     const trigger = skillLoadTrigger(
       state.currentTurnExplicitSkillsCommand,
@@ -436,11 +630,13 @@ export class EventProcessor {
       metadata: {
         tool_name: tool,
         call_id: callID,
+        tool_approval: "approved",
         title,
         reasoning: reasoning || undefined,
         ...skillLoadMetadata(tool, toolArgs),
         ...(trigger !== undefined ? { skill_load_trigger: trigger } : {}),
       },
+      ...(capturedError !== undefined ? { error: capturedError } : {}),
       metrics: {
         start: startTime,
         end: endTime,
@@ -506,6 +702,8 @@ export class EventProcessor {
           toolCallMessageIds: new Map(),
           toolCallArgs: new Map(),
           toolCallOutputs: new Map(),
+          toolCallErrors: new Map(),
+          deniedToolCallIds: new Set(),
         }
         this.sessionStates.set(sessionID, childState)
 
@@ -568,6 +766,8 @@ export class EventProcessor {
       toolCallMessageIds: new Map(),
       toolCallArgs: new Map(),
       toolCallOutputs: new Map(),
+      toolCallErrors: new Map(),
+      deniedToolCallIds: new Set(),
     }
     this.sessionStates.set(sessionKey, state)
 
@@ -662,6 +862,10 @@ export class EventProcessor {
         if (partState?.status === "completed" && partState?.output !== undefined) {
           state.toolCallOutputs.set(callID, partState.output)
           this.log("Captured tool output from completed state", { callID })
+        }
+        if (partState?.status === "error" && partState.error !== undefined) {
+          state.toolCallErrors.set(callID, conciseErrorText(partState.error))
+          this.log("Captured tool error from error state", { callID })
         }
 
         this.log("Tracking LLM tool call", { messageId, callID, tool })
