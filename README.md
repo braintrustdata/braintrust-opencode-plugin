@@ -1,3 +1,7 @@
+# New Repo
+
+The code in this repo has moved to https://github.com/braintrustdata/braintrust-coding-agent-plugins. Any future work/releases will happen in that repo.
+
 # @braintrust/trace-opencode
 
 Braintrust tracing plugin for [OpenCode](https://opencode.ai). Automatically traces your OpenCode sessions to Braintrust with hierarchical spans.
