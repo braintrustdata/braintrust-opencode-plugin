@@ -103,6 +103,20 @@ function skillToolSpanName(tool: string, title: string, args: unknown, fallback:
   return name ? `skill: ${name}` : title || "skill"
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+function conciseErrorText(value: unknown, fallback = "Tool execution failed"): string {
+  if (typeof value === "string") return value.split("\n")[0] || fallback
+  if (value instanceof Error) return value.message || fallback
+  if (isRecord(value)) {
+    const candidate = value.error ?? value.message ?? value.stderr ?? value.output ?? value.result
+    if (typeof candidate === "string") return candidate.split("\n")[0] || fallback
+  }
+  return fallback
+}
+
 // State management for tracing
 interface SessionState {
   rootSpanId: string
@@ -138,6 +152,8 @@ interface SessionState {
   toolCallMessageIds: Map<string, string> // callID -> messageId (to look up reasoning)
   toolCallArgs: Map<string, Record<string, unknown> | unknown> // callID -> tool arguments
   toolCallOutputs: Map<string, unknown> // callID -> tool output (captured from message.part.updated completed state)
+  toolCallErrors: Map<string, string> // callID -> tool error captured from message.part.updated error state
+  deniedToolCallIds: Set<string> // callIDs already emitted as denied spans
 }
 
 const sessionStates = new Map<string, SessionState>()
@@ -189,6 +205,44 @@ export function createTracingHooks(
       // Fallback: fire-and-forget direct insert (used in tests)
       btClient.insertSpan(span).catch((e) => log("enqueue fallback: error", { error: String(e) }))
     }
+  }
+
+  const emitDeniedToolSpan = (
+    sessionID: string,
+    callID: string,
+    tool: string,
+    fallbackInput: unknown,
+    permissionMetadata: Record<string, unknown> = {},
+  ): void => {
+    const state = sessionStates.get(sessionID)
+    if (!state?.currentTurnSpanId) return
+
+    state.deniedToolCallIds.add(callID)
+    const toolArgs = state.toolCallArgs.get(callID) ?? fallbackInput ?? permissionMetadata
+    const title = typeof permissionMetadata.title === "string" ? permissionMetadata.title : tool
+    const toolSpanId = generateUUID()
+    const now = wallClock.nowSeconds()
+    enqueue({
+      id: generateUUID(),
+      span_id: toolSpanId,
+      root_span_id: state.effectiveRootSpanId,
+      span_parents: [state.currentTurnSpanId],
+      input: toolArgs,
+      metadata: {
+        tool_name: tool,
+        call_id: callID,
+        tool_approval: "denied",
+        ...permissionMetadata,
+      },
+      metrics: {
+        start: state.toolStartTimes.get(callID) ?? now,
+        end: now,
+      },
+      span_attributes: {
+        name: skillToolSpanName(tool, title, toolArgs, formatToolName(tool, title)),
+        type: "tool",
+      },
+    })
   }
 
   // Log that we're creating hooks (this runs at plugin load time)
@@ -285,6 +339,8 @@ export function createTracingHooks(
                 toolCallMessageIds: new Map(),
                 toolCallArgs: new Map(),
                 toolCallOutputs: new Map(),
+                toolCallErrors: new Map(),
+                deniedToolCallIds: new Set(),
               }
               sessionStates.set(childSessionID, childState)
 
@@ -362,6 +418,8 @@ export function createTracingHooks(
             toolCallMessageIds: new Map(),
             toolCallArgs: new Map(),
             toolCallOutputs: new Map(),
+            toolCallErrors: new Map(),
+            deniedToolCallIds: new Set(),
           }
           sessionStates.set(sessionKey, state)
 
@@ -477,6 +535,10 @@ export function createTracingHooks(
                   callID,
                   outputType: typeof partState.output,
                 })
+              }
+              if (partState?.status === "error" && partState.error !== undefined) {
+                state.toolCallErrors.set(callID, conciseErrorText(partState.error))
+                log("Captured tool error from error state", { callID })
               }
 
               log("Tracking LLM tool call", { messageId, callID, tool })
@@ -884,6 +946,8 @@ export function createTracingHooks(
             toolCallMessageIds: new Map(),
             toolCallArgs: new Map(),
             toolCallOutputs: new Map(),
+            toolCallErrors: new Map(),
+            deniedToolCallIds: new Set(),
           }
           sessionStates.set(sessionID, state)
 
@@ -1081,6 +1145,17 @@ export function createTracingHooks(
 
         state.toolCallCount++
 
+        if (state.deniedToolCallIds.has(callID)) {
+          state.deniedToolCallIds.delete(callID)
+          state.toolStartTimes.delete(callID)
+          state.toolCallArgs.delete(callID)
+          state.toolCallOutputs.delete(callID)
+          state.toolCallErrors.delete(callID)
+          state.toolCallMessageIds.delete(callID)
+          log("Skipping tool.execute.after for denied tool call", { callID })
+          return
+        }
+
         // Get start time and clean up
         const startTime = state.toolStartTimes.get(callID)
         state.toolStartTimes.delete(callID)
@@ -1092,6 +1167,8 @@ export function createTracingHooks(
         // Get tool output captured from message.part.updated completed state
         const capturedOutput = state.toolCallOutputs.get(callID)
         state.toolCallOutputs.delete(callID)
+        const capturedError = state.toolCallErrors.get(callID)
+        state.toolCallErrors.delete(callID)
 
         // Look up reasoning for this tool call via messageId
         const messageId = state.toolCallMessageIds.get(callID)
@@ -1104,7 +1181,11 @@ export function createTracingHooks(
         // Prefer output captured from message.part.updated, fall back to result.output.
         // MCP tools return { content: [...] } instead of a plain output value.
         const rawOutput =
-          capturedOutput !== undefined ? capturedOutput : extractToolOutput(result.output ?? result)
+          capturedOutput !== undefined
+            ? capturedOutput
+            : capturedError !== undefined
+              ? capturedError
+              : extractToolOutput(result.output ?? result)
         const toolOutput = typeof rawOutput === "string" ? rawOutput.substring(0, 10000) : rawOutput
         const formattedName = formatToolName(tool, result.title)
         const trigger = skillLoadTrigger(
@@ -1146,6 +1227,7 @@ export function createTracingHooks(
           metadata: {
             tool_name: tool,
             call_id: callID,
+            tool_approval: "approved",
             title: result.title,
             reasoning: reasoning || undefined,
             ...skillLoadMetadata(tool, toolArgs),
@@ -1155,6 +1237,7 @@ export function createTracingHooks(
             start: startTime,
             end: endTime,
           },
+          ...(capturedError !== undefined ? { error: capturedError } : {}),
           span_attributes: {
             name: skillToolSpanName(tool, result.title, toolArgs, formattedName),
             type: "tool",
@@ -1181,6 +1264,48 @@ export function createTracingHooks(
             },
           })
           .catch(() => {})
+      }
+    },
+
+    "permission.ask": async (permissionInput: unknown, output: unknown) => {
+      try {
+        const inputRecord = isRecord(permissionInput) ? permissionInput : {}
+        const outputRecord = isRecord(output) ? output : {}
+        if (outputRecord.status !== "deny") return
+
+        const toolRecord = isRecord(inputRecord.tool) ? inputRecord.tool : {}
+        const callID =
+          typeof inputRecord.callID === "string"
+            ? inputRecord.callID
+            : typeof toolRecord.callID === "string"
+              ? toolRecord.callID
+              : undefined
+        const sessionID =
+          typeof inputRecord.sessionID === "string"
+            ? inputRecord.sessionID
+            : typeof toolRecord.sessionID === "string"
+              ? toolRecord.sessionID
+              : undefined
+        const tool =
+          typeof inputRecord.tool === "string"
+            ? inputRecord.tool
+            : typeof inputRecord.toolName === "string"
+              ? inputRecord.toolName
+              : typeof toolRecord.name === "string"
+                ? toolRecord.name
+                : typeof toolRecord.tool === "string"
+                  ? toolRecord.tool
+                  : undefined
+
+        if (!sessionID || !callID || !tool) return
+
+        emitDeniedToolSpan(sessionID, callID, tool, inputRecord.input ?? inputRecord.args, {
+          permission_id: inputRecord.id,
+          permission_type: inputRecord.type,
+          title: inputRecord.title,
+        })
+      } catch (error) {
+        log("Error in permission.ask hook", { error: String(error) })
       }
     },
   }
